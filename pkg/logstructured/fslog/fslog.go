@@ -20,7 +20,7 @@ func New(config Config) *FSLog {
 		rootDir:        config.RootDir,
 		byKey:          btree.NewMap[string, []*revOp](0),
 		byRev:          map[int64]*revOp{},
-		stream:         make(chan server.Events),
+		stream:         make(chan server.Events, 128),
 		syncEveryWrite: config.SyncEveryWrite,
 		snapshotEvery:  config.SnapshotEvery,
 		segmentBytes:   config.SegmentBytes,
@@ -169,12 +169,6 @@ func (f *FSLog) CurrentRevision(context.Context) (int64, error) {
 	return f.currentRev.Load(), nil
 }
 
-func (f *FSLog) Watch(context.Context, string) <-chan server.Events {
-	result := make(chan server.Events)
-	close(result)
-	return result
-}
-
 func (f *FSLog) DbSize(context.Context) (int64, error) {
 	return 0, nil
 }
@@ -182,5 +176,3 @@ func (f *FSLog) DbSize(context.Context) (int64, error) {
 func (f *FSLog) Compact(context.Context, int64) (int64, error) {
 	return 0, ErrNotImplemented
 }
-
-func (f *FSLog) WaitForSyncTo(int64) {}

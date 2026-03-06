@@ -32,6 +32,7 @@ func (f *FSLog) Append(ctx context.Context, event *server.Event) (int64, error) 
 	}
 	f.currentRev.Store(nextRev)
 	f.appliedRev.Store(nextRev)
+	f.emitEvents(server.Events{eventFromOp(f.byRev[nextRev], true, true)})
 	f.cond.Broadcast()
 	return nextRev, nil
 }

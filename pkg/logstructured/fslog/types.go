@@ -75,6 +75,7 @@ type FSLog struct {
 	currentRev atomic.Int64
 	compactRev atomic.Int64
 	appliedRev atomic.Int64
+	watchStarted atomic.Bool
 
 	byKey *btree.Map[string, []*revOp]
 	byRev map[int64]*revOp
