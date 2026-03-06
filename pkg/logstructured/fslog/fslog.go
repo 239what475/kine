@@ -169,18 +169,6 @@ func (f *FSLog) CurrentRevision(context.Context) (int64, error) {
 	return f.currentRev.Load(), nil
 }
 
-func (f *FSLog) List(context.Context, string, string, int64, int64, bool, bool) (int64, server.Events, error) {
-	return 0, nil, ErrNotImplemented
-}
-
-func (f *FSLog) Count(context.Context, string, string, int64) (int64, int64, error) {
-	return 0, 0, ErrNotImplemented
-}
-
-func (f *FSLog) After(context.Context, string, int64, int64) (int64, server.Events, error) {
-	return 0, nil, ErrNotImplemented
-}
-
 func (f *FSLog) Watch(context.Context, string) <-chan server.Events {
 	result := make(chan server.Events)
 	close(result)
