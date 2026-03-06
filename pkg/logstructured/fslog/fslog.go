@@ -41,21 +41,27 @@ func (f *FSLog) Start(ctx context.Context) error {
 		return err
 	}
 	if err := f.loadMetadata(); err != nil {
-		f.releaseLock()
+		f.releaseResources()
 		return err
 	}
 	if err := f.scanState(); err != nil {
-		f.releaseLock()
+		f.releaseResources()
+		return err
+	}
+	if err := f.replayJournal(); err != nil {
+		f.releaseResources()
 		return err
 	}
 
-	f.currentRev.Store(f.metadata.CurrentRevision)
+	currentRev := maxInt64(f.metadata.CurrentRevision, f.replayedRevision)
+	f.currentRev.Store(currentRev)
 	f.compactRev.Store(f.metadata.CompactRevision)
-	f.appliedRev.Store(f.metadata.CurrentRevision)
+	f.appliedRev.Store(currentRev)
+	f.metadata.CurrentRevision = currentRev
 
 	go func() {
 		<-ctx.Done()
-		f.releaseLock()
+		f.releaseResources()
 	}()
 
 	return nil
@@ -86,9 +92,10 @@ func (f *FSLog) acquireLock() error {
 	return nil
 }
 
-func (f *FSLog) releaseLock() {
+func (f *FSLog) releaseResources() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.closeSegmentLocked()
 	if f.lockFile == nil {
 		return
 	}
@@ -125,6 +132,9 @@ func (f *FSLog) scanState() error {
 	}
 	f.snapshotFiles = snapshots
 	f.journalFiles = journals
+	if f.metadata.ActiveSegment == "" && len(journals) > 0 {
+		f.metadata.ActiveSegment = filepath.Base(journals[len(journals)-1])
+	}
 	return nil
 }
 
@@ -135,10 +145,20 @@ func collectFileNames(dir string) ([]string, error) {
 	}
 	files := make([]string, 0, len(entries))
 	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
 		files = append(files, filepath.Join(dir, entry.Name()))
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (f *FSLog) CompactRevision(context.Context) (int64, error) {
@@ -167,8 +187,29 @@ func (f *FSLog) Watch(context.Context, string) <-chan server.Events {
 	return result
 }
 
-func (f *FSLog) Append(context.Context, *server.Event) (int64, error) {
-	return 0, ErrNotImplemented
+func (f *FSLog) Append(ctx context.Context, event *server.Event) (int64, error) {
+	_ = ctx
+	if event == nil || event.KV == nil {
+		return 0, fmt.Errorf("filesystem backend append requires event kv")
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	nextRev := f.currentRev.Load() + 1
+	record := recordFromEvent(nextRev, event)
+	if err := f.appendRecordLocked(record); err != nil {
+		return 0, err
+	}
+	f.applyRecordLocked(record)
+	f.currentRev.Store(nextRev)
+	f.appliedRev.Store(nextRev)
+	f.metadata.CurrentRevision = nextRev
+	if err := f.writeMetadataLocked(); err != nil {
+		return nextRev, nil
+	}
+	f.cond.Broadcast()
+	return nextRev, nil
 }
 
 func (f *FSLog) DbSize(context.Context) (int64, error) {

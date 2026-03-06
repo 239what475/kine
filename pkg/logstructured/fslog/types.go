@@ -1,6 +1,7 @@
 package fslog
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,6 +31,18 @@ type metadata struct {
 	CurrentRevision int64  `json:"currentRevision"`
 	CompactRevision int64  `json:"compactRevision"`
 	ActiveSegment   string `json:"activeSegment,omitempty"`
+}
+
+type JournalRecord struct {
+	Revision       int64  `json:"revision"`
+	Key            string `json:"key"`
+	Create         bool   `json:"create,omitempty"`
+	Delete         bool   `json:"delete,omitempty"`
+	CreateRevision int64  `json:"createRevision,omitempty"`
+	PrevRevision   int64  `json:"prevRevision,omitempty"`
+	Lease          int64  `json:"lease,omitempty"`
+	Value          []byte `json:"value,omitempty"`
+	PrevValue      []byte `json:"prevValue,omitempty"`
 }
 
 type revOp struct {
@@ -74,6 +87,13 @@ type FSLog struct {
 	snapshotDir   string
 	journalFiles  []string
 	snapshotFiles []string
+
+	segmentFile      *os.File
+	segmentWriter    *bufio.Writer
+	segmentName      string
+	segmentSize      int64
+	segmentStartRev  int64
+	replayedRevision int64
 }
 
 func (f *FSLog) initPaths() {
