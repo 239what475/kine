@@ -63,17 +63,17 @@ func TestSnapshotAndJournalRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rev != 3 {
-		t.Fatalf("expected recovered revision 3, got %d", rev)
+	if rev != 4 {
+		t.Fatalf("expected recovered revision 4, got %d", rev)
 	}
 	assertEventKeys(t, events, "/snap/a", "/snap/b")
 
-	rev, historical, err := restarted.List(context.Background(), "/%", "", 0, 2, false, false)
+	rev, historical, err := restarted.List(context.Background(), "/%", "", 0, 3, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rev != 3 {
-		t.Fatalf("expected historical list to report current revision 3, got %d", rev)
+	if rev != 4 {
+		t.Fatalf("expected historical list to report current revision 4, got %d", rev)
 	}
 	assertEventKeys(t, historical, "/snap/a")
 	if got := string(historical[0].KV.Value); got != "two" {
@@ -100,8 +100,8 @@ func TestStartupIgnoresInterruptedSnapshotTempFile(t *testing.T) {
 	if err := restarted.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := restarted.currentRev.Load(); got != 2 {
-		t.Fatalf("expected revision 2 after restart with temp snapshot file, got %d", got)
+	if got := restarted.currentRev.Load(); got != 3 {
+		t.Fatalf("expected revision 3 after restart with temp snapshot file, got %d", got)
 	}
 }
 

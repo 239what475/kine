@@ -10,6 +10,8 @@ import (
 func (f *FSLog) List(ctx context.Context, prefix, startKey string, limit, revision int64, includeDeleted, keysOnly bool) (int64, server.Events, error) {
 	_ = ctx
 
+	prefix, startKey = normalizeLegacyRootList(prefix, startKey, limit)
+
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
@@ -55,7 +57,8 @@ func (f *FSLog) Count(ctx context.Context, prefix, startKey string, revision int
 		targetRevision = revision
 	}
 
-	ops := f.listOpsLocked(prefix, startKey, targetRevision, false, 0)
+	matchPrefix, prefixMode := normalizeCountPattern(prefix)
+	ops := f.listOpsForPatternLocked(matchPrefix, prefixMode, startKey, targetRevision, false, 0)
 	return currentRev, int64(len(ops)), nil
 }
 
@@ -71,7 +74,7 @@ func (f *FSLog) After(ctx context.Context, prefix string, revision, limit int64)
 		return currentRev, nil, server.ErrCompacted
 	}
 
-	matchPrefix, prefixMode := normalizePattern(prefix)
+	matchPrefix, prefixMode := normalizeWatchPattern(prefix)
 	events := make(server.Events, 0)
 	for nextRevision := revision + 1; nextRevision <= currentRev; nextRevision++ {
 		op := f.byRev[nextRevision]
@@ -90,7 +93,11 @@ func (f *FSLog) After(ctx context.Context, prefix string, revision, limit int64)
 }
 
 func (f *FSLog) listOpsLocked(pattern, startKey string, revision int64, includeDeleted bool, limit int64) []*revOp {
-	matchPrefix, prefixMode := normalizePattern(pattern)
+	matchPrefix, prefixMode := normalizeListPattern(pattern)
+	return f.listOpsForPatternLocked(matchPrefix, prefixMode, startKey, revision, includeDeleted, limit)
+}
+
+func (f *FSLog) listOpsForPatternLocked(matchPrefix string, prefixMode bool, startKey string, revision int64, includeDeleted bool, limit int64) []*revOp {
 	if !prefixMode {
 		op := f.getRevisionOpLocked(matchPrefix, revision, includeDeleted)
 		if op == nil {
@@ -198,7 +205,44 @@ func eventFromOp(op *revOp, includeValue, includePrevValue bool) *server.Event {
 	return event
 }
 
-func normalizePattern(pattern string) (string, bool) {
+func normalizeLegacyRootList(pattern, startKey string, limit int64) (string, string) {
+	// Kine's TTL bootstrap path calls Log.List directly with pattern="/" and uses the
+	// last returned key as the next page's startKey. Existing backends interpret that as
+	// a root-prefix scan with continue-token semantics, even though LogStructured.List is
+	// normally the layer that makes those semantics explicit.
+	//
+	// Keep that compatibility local to fslog so exact single-key reads for "/" (limit=1)
+	// stay exact, while the legacy root scan used by TTL initialization still behaves the
+	// same as the older SQL/NATS-backed implementations.
+	if pattern != "/" || limit <= 1 {
+		return pattern, startKey
+	}
+	if startKey != "" && !strings.HasSuffix(startKey, "\x00") {
+		startKey += "\x00"
+	}
+	return "/%", startKey
+}
+
+func normalizeListPattern(pattern string) (string, bool) {
+	pattern = strings.ReplaceAll(pattern, "^_", "_")
+	if strings.HasSuffix(pattern, "%") {
+		return strings.TrimSuffix(pattern, "%"), true
+	}
+	return pattern, false
+}
+
+func normalizeCountPattern(pattern string) (string, bool) {
+	pattern = strings.ReplaceAll(pattern, "^_", "_")
+	if strings.HasSuffix(pattern, "%") {
+		return strings.TrimSuffix(pattern, "%"), true
+	}
+	if strings.HasSuffix(pattern, "/") {
+		return pattern, true
+	}
+	return pattern, false
+}
+
+func normalizeWatchPattern(pattern string) (string, bool) {
 	pattern = strings.ReplaceAll(pattern, "^_", "_")
 	if strings.HasSuffix(pattern, "%") {
 		return strings.TrimSuffix(pattern, "%"), true

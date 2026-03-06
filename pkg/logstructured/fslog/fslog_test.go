@@ -135,3 +135,25 @@ func TestStartReleasesLockOnContextCancel(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestStartBootstrapsCompactRevisionKeyOnFreshStore(t *testing.T) {
+	rootDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	log := New(Config{RootDir: rootDir})
+	if err := log.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := log.currentRev.Load(); got != 1 {
+		t.Fatalf("expected fresh fslog start to bootstrap revision 1, got %d", got)
+	}
+	if got := log.appliedRev.Load(); got != 1 {
+		t.Fatalf("expected applied revision 1 after bootstrap, got %d", got)
+	}
+	kv := log.getRevisionOpLocked("compact_rev_key", 1, true)
+	if kv == nil || !kv.create {
+		t.Fatalf("expected compact_rev_key bootstrap record, got %+v", kv)
+	}
+}

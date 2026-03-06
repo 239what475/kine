@@ -19,13 +19,14 @@ func TestAppendCreatesJournalAndMetadata(t *testing.T) {
 	if err := log.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
+	baseRev := log.currentRev.Load()
 
 	rev, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rev != 1 {
-		t.Fatalf("expected revision 1, got %d", rev)
+	if rev != baseRev+1 {
+		t.Fatalf("expected revision %d, got %d", baseRev+1, rev)
 	}
 	if log.metadata.ActiveSegment != segmentNameForRevision(1) {
 		t.Fatalf("expected active segment %q, got %q", segmentNameForRevision(1), log.metadata.ActiveSegment)
@@ -37,8 +38,8 @@ func TestAppendCreatesJournalAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(metadataBytes), `"currentRevision": 1`) {
-		t.Fatalf("expected metadata to include currentRevision 1, got %s", metadataBytes)
+	if !strings.Contains(string(metadataBytes), `"currentRevision": 2`) {
+		t.Fatalf("expected metadata to include currentRevision 2, got %s", metadataBytes)
 	}
 }
 
@@ -49,6 +50,7 @@ func TestAppendReplayOnRestart(t *testing.T) {
 	if err := log.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
+	baseRev := log.currentRev.Load()
 	createRev, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}})
 	if err != nil {
 		t.Fatal(err)
@@ -65,11 +67,11 @@ func TestAppendReplayOnRestart(t *testing.T) {
 	if err := log2.Start(ctx2); err != nil {
 		t.Fatal(err)
 	}
-	if got := log2.currentRev.Load(); got != 2 {
-		t.Fatalf("expected current revision 2 after replay, got %d", got)
+	if got := log2.currentRev.Load(); got != baseRev+2 {
+		t.Fatalf("expected current revision %d after replay, got %d", baseRev+2, got)
 	}
-	if len(log2.byRev) != 2 {
-		t.Fatalf("expected 2 replayed revisions, got %d", len(log2.byRev))
+	if len(log2.byRev) != int(baseRev+2) {
+		t.Fatalf("expected %d replayed revisions, got %d", baseRev+2, len(log2.byRev))
 	}
 }
 
@@ -87,8 +89,8 @@ func TestAppendRotatesSegment(t *testing.T) {
 	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/b", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(log.journalFiles) != 2 {
-		t.Fatalf("expected 2 journal files after rotation, got %d", len(log.journalFiles))
+	if len(log.journalFiles) != int(log.currentRev.Load()) {
+		t.Fatalf("expected %d journal files after rotation, got %d", log.currentRev.Load(), len(log.journalFiles))
 	}
 }
 
@@ -99,6 +101,7 @@ func TestReplayTruncatesPartialFinalLine(t *testing.T) {
 	if err := log.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
+	baseRev := log.currentRev.Load()
 	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +124,8 @@ func TestReplayTruncatesPartialFinalLine(t *testing.T) {
 	if err := log2.Start(ctx2); err != nil {
 		t.Fatal(err)
 	}
-	if got := log2.currentRev.Load(); got != 1 {
-		t.Fatalf("expected replayed current revision 1, got %d", got)
+	if got := log2.currentRev.Load(); got != baseRev+1 {
+		t.Fatalf("expected replayed current revision %d, got %d", baseRev+1, got)
 	}
 	data, err := os.ReadFile(segmentPath)
 	if err != nil {

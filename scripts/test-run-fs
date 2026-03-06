@@ -1,0 +1,12 @@
+#!/bin/bash
+
+start-test() {
+    local fs_endpoint="fs://$TEST_DIR/fs-data"
+    KINE_IMAGE=$IMAGE KINE_ENDPOINT="$fs_endpoint" run-apiserver-tests
+    KINE_IMAGE=$IMAGE KINE_ENDPOINT="$fs_endpoint" provision-kine
+    local kine_url=$(cat $TEST_DIR/kine/*/metadata/url)
+    K3S_DATASTORE_ENDPOINT=$kine_url provision-cluster
+}
+export -f start-test
+
+LABEL=fs run-test

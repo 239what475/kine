@@ -60,6 +60,11 @@ func (f *FSLog) Start(ctx context.Context) error {
 	}
 
 	currentRev := maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
+	if err := f.bootstrapCompatibilityRevision(currentRev); err != nil {
+		f.releaseResources()
+		return err
+	}
+	currentRev = maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
 	f.currentRev.Store(currentRev)
 	f.compactRev.Store(f.metadata.CompactRevision)
 	f.appliedRev.Store(currentRev)
@@ -172,6 +177,45 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func bootstrapRecord() JournalRecord {
+	return JournalRecord{
+		Revision:       1,
+		Key:            "compact_rev_key",
+		Create:         true,
+		CreateRevision: 1,
+		Value:          []byte(""),
+	}
+}
+
+func (f *FSLog) bootstrapCompatibilityRevision(currentRev int64) error {
+	if currentRev != 0 {
+		return nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.byRev) != 0 {
+		return nil
+	}
+	if _, ok := f.byKey.Get("compact_rev_key"); ok {
+		return nil
+	}
+
+	// Existing Kine backends start a fresh store at revision 2 before any test data is
+	// written: revision 1 is consumed by an internal compact revision key, and revision 2
+	// is used by /registry/health during LogStructured.Start. fslog keeps compact state in
+	// metadata instead of the KV history, but we still create the legacy compact_rev_key on
+	// brand-new stores so startup revision behavior stays consistent with the other backends.
+	record := bootstrapRecord()
+	if err := f.appendRecordLocked(record); err != nil {
+		return err
+	}
+	f.applyRecordLocked(record)
+	f.metadata.CurrentRevision = record.Revision
+	return f.writeMetadataLocked()
 }
 
 func (f *FSLog) CompactRevision(context.Context) (int64, error) {
