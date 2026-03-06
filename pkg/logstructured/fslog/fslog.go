@@ -18,14 +18,15 @@ import (
 
 func New(config Config) *FSLog {
 	log := &FSLog{
-		rootDir:        config.RootDir,
-		byKey:          btree.NewMap[string, []*revOp](0),
-		byRev:          map[int64]*revOp{},
-		stream:         make(chan server.Events, 128),
-		syncEveryWrite: config.SyncEveryWrite,
-		snapshotEvery:  config.SnapshotEvery,
-		segmentBytes:   config.SegmentBytes,
-		cond:           sync.NewCond(&sync.Mutex{}),
+		rootDir:          config.RootDir,
+		byKey:            btree.NewMap[string, []*revOp](0),
+		byRev:            map[int64]*revOp{},
+		stream:           make(chan server.Events, 128),
+		syncEveryWrite:   config.SyncEveryWrite,
+		snapshotEvery:    config.SnapshotEvery,
+		segmentBytes:     config.SegmentBytes,
+		compactMinRetain: config.CompactMinRetain,
+		cond:             sync.NewCond(&sync.Mutex{}),
 	}
 	log.initPaths()
 	return log
@@ -185,6 +186,3 @@ func (f *FSLog) DbSize(context.Context) (int64, error) {
 	return 0, nil
 }
 
-func (f *FSLog) Compact(context.Context, int64) (int64, error) {
-	return 0, ErrNotImplemented
-}

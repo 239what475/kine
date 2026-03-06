@@ -49,10 +49,11 @@ func ParseConfig(cfg *drivers.Config) (fslog.Config, error) {
 	}
 
 	result := fslog.Config{
-		RootDir:        rootDir,
-		SyncEveryWrite: true,
-		SnapshotEvery:  defaultSnapshotEvery,
-		SegmentBytes:   defaultSegmentBytes,
+		RootDir:          rootDir,
+		SyncEveryWrite:   true,
+		SnapshotEvery:    defaultSnapshotEvery,
+		SegmentBytes:     defaultSegmentBytes,
+		CompactMinRetain: cfg.CompactMinRetain,
 	}
 
 	if value := u.Query().Get(querySync); value != "" {

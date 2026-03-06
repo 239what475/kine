@@ -24,10 +24,11 @@ const (
 )
 
 type Config struct {
-	RootDir        string
-	SyncEveryWrite bool
-	SnapshotEvery  int64
-	SegmentBytes   int64
+	RootDir          string
+	SyncEveryWrite   bool
+	SnapshotEvery    int64
+	SegmentBytes     int64
+	CompactMinRetain int64
 }
 
 type metadata struct {
@@ -92,9 +93,10 @@ type FSLog struct {
 	broadcaster broadcaster.Broadcaster
 	stream      chan server.Events
 
-	syncEveryWrite bool
-	snapshotEvery  int64
-	segmentBytes   int64
+	syncEveryWrite   bool
+	snapshotEvery    int64
+	segmentBytes     int64
+	compactMinRetain int64
 
 	cond *sync.Cond
 
