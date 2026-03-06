@@ -175,31 +175,6 @@ func (f *FSLog) Watch(context.Context, string) <-chan server.Events {
 	return result
 }
 
-func (f *FSLog) Append(ctx context.Context, event *server.Event) (int64, error) {
-	_ = ctx
-	if event == nil || event.KV == nil {
-		return 0, fmt.Errorf("filesystem backend append requires event kv")
-	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	nextRev := f.currentRev.Load() + 1
-	record := recordFromEvent(nextRev, event)
-	if err := f.appendRecordLocked(record); err != nil {
-		return 0, err
-	}
-	f.applyRecordLocked(record)
-	f.currentRev.Store(nextRev)
-	f.appliedRev.Store(nextRev)
-	f.metadata.CurrentRevision = nextRev
-	if err := f.writeMetadataLocked(); err != nil {
-		return nextRev, nil
-	}
-	f.cond.Broadcast()
-	return nextRev, nil
-}
-
 func (f *FSLog) DbSize(context.Context) (int64, error) {
 	return 0, nil
 }

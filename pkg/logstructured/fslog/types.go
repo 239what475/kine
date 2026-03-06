@@ -57,6 +57,16 @@ type revOp struct {
 	prevValue      []byte
 }
 
+func (r *revOp) effectiveCreateRevision() int64 {
+	if r == nil {
+		return 0
+	}
+	if r.createRevision != 0 {
+		return r.createRevision
+	}
+	return r.revision
+}
+
 type FSLog struct {
 	rootDir string
 

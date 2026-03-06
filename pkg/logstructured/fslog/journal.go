@@ -9,29 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/k3s-io/kine/pkg/server"
 )
-
-func recordFromEvent(revision int64, event *server.Event) JournalRecord {
-	record := JournalRecord{
-		Revision: revision,
-		Key:      event.KV.Key,
-		Create:   event.Create,
-		Delete:   event.Delete,
-		Lease:    event.KV.Lease,
-		Value:    append([]byte(nil), event.KV.Value...),
-	}
-	if event.Create {
-		record.CreateRevision = revision
-	} else {
-		record.CreateRevision = event.KV.CreateRevision
-	}
-	if event.PrevKV != nil {
-		record.PrevRevision = event.PrevKV.ModRevision
-		record.PrevValue = append([]byte(nil), event.PrevKV.Value...)
-	}
-	return record
-}
 
 func (f *FSLog) appendRecordLocked(record JournalRecord) error {
 	data, err := json.Marshal(record)
@@ -185,8 +163,8 @@ func (f *FSLog) applyRecordLocked(record JournalRecord) {
 		createRevision: record.CreateRevision,
 		prevRevision:   record.PrevRevision,
 		lease:          record.Lease,
-		value:          append([]byte(nil), record.Value...),
-		prevValue:      append([]byte(nil), record.PrevValue...),
+		value:          cloneBytes(record.Value),
+		prevValue:      cloneBytes(record.PrevValue),
 	}
 	f.byRev[record.Revision] = op
 	if values, ok := f.byKey.Get(record.Key); ok {
@@ -213,3 +191,4 @@ func containsPath(paths []string, path string) bool {
 	}
 	return false
 }
+

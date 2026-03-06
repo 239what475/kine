@@ -49,10 +49,12 @@ func TestAppendReplayOnRestart(t *testing.T) {
 	if err := log.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
-		if _, err := log.Append(ctx, &server.Event{KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
-			t.Fatal(err)
-		}
+	createRev, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Append(ctx, &server.Event{KV: &server.KeyValue{Key: "/a", Value: []byte("value-2"), CreateRevision: createRev}, PrevKV: &server.KeyValue{Key: "/a", Value: []byte("value"), CreateRevision: createRev, ModRevision: createRev}}); err != nil {
+		t.Fatal(err)
 	}
 	cancel()
 	log.releaseResources()
@@ -79,10 +81,10 @@ func TestAppendRotatesSegment(t *testing.T) {
 	if err := log.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := log.Append(ctx, &server.Event{KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
+	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := log.Append(ctx, &server.Event{KV: &server.KeyValue{Key: "/b", Value: []byte("value")}}); err != nil {
+	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/b", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
 	if len(log.journalFiles) != 2 {
@@ -97,7 +99,7 @@ func TestReplayTruncatesPartialFinalLine(t *testing.T) {
 	if err := log.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := log.Append(ctx, &server.Event{KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
+	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
 	segmentPath := filepath.Join(log.journalDir, log.metadata.ActiveSegment)
