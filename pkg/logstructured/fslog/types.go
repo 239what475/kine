@@ -1,6 +1,8 @@
 package fslog
 
 import (
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -9,11 +11,25 @@ import (
 	"github.com/tidwall/btree"
 )
 
+const (
+	lockFileName     = "LOCK"
+	currentFileName  = "CURRENT"
+	metadataFileName = "metadata.json"
+	journalDirName   = "journal"
+	snapshotDirName  = "snapshots"
+)
+
 type Config struct {
 	RootDir        string
 	SyncEveryWrite bool
 	SnapshotEvery  int64
 	SegmentBytes   int64
+}
+
+type metadata struct {
+	CurrentRevision int64  `json:"currentRevision"`
+	CompactRevision int64  `json:"compactRevision"`
+	ActiveSegment   string `json:"activeSegment,omitempty"`
 }
 
 type revOp struct {
@@ -48,4 +64,22 @@ type FSLog struct {
 	segmentBytes   int64
 
 	cond *sync.Cond
+
+	lockFile      *os.File
+	metadata      metadata
+	lockPath      string
+	currentPath   string
+	metadataPath  string
+	journalDir    string
+	snapshotDir   string
+	journalFiles  []string
+	snapshotFiles []string
+}
+
+func (f *FSLog) initPaths() {
+	f.lockPath = filepath.Join(f.rootDir, lockFileName)
+	f.currentPath = filepath.Join(f.rootDir, currentFileName)
+	f.metadataPath = filepath.Join(f.rootDir, metadataFileName)
+	f.journalDir = filepath.Join(f.rootDir, journalDirName)
+	f.snapshotDir = filepath.Join(f.rootDir, snapshotDirName)
 }
