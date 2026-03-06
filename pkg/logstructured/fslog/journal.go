@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-
 )
 
 func (f *FSLog) appendRecordLocked(record JournalRecord) error {
@@ -95,13 +94,14 @@ func (f *FSLog) closeSegmentLocked() {
 }
 
 func segmentNameForRevision(revision int64) string {
-	return fmt.Sprintf("%020d.log", revision)
+	return fmt.Sprintf("%020d%s", revision, journalFileSuffix)
 }
 
 func (f *FSLog) replayJournal() error {
 	f.replayedRevision = 0
-	for index, path := range f.journalFiles {
-		if err := f.replayJournalFile(path, index == len(f.journalFiles)-1); err != nil {
+	paths := f.journalFilesForReplay()
+	for index, path := range paths {
+		if err := f.replayJournalFile(path, index == len(paths)-1); err != nil {
 			return err
 		}
 	}
@@ -145,6 +145,10 @@ func (f *FSLog) replayJournalFile(path string, allowTailRepair bool) error {
 			}
 			return fmt.Errorf("decode journal record in %q: %w", path, uerr)
 		}
+		if record.Revision <= f.loadedSnapshotRev {
+			offset = nextOffset
+			continue
+		}
 
 		f.applyRecordLocked(record)
 		if record.Revision > f.replayedRevision {
@@ -152,6 +156,20 @@ func (f *FSLog) replayJournalFile(path string, allowTailRepair bool) error {
 		}
 		offset = nextOffset
 	}
+}
+
+func (f *FSLog) journalFilesForReplay() []string {
+	if f.loadedSnapshotRev == 0 {
+		return append([]string(nil), f.journalFiles...)
+	}
+	paths := make([]string, 0, len(f.journalFiles))
+	for _, path := range f.journalFiles {
+		startRev, ok := parseRevisionPrefix(path, journalFileSuffix)
+		if !ok || startRev > f.loadedSnapshotRev {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 func (f *FSLog) applyRecordLocked(record JournalRecord) {
@@ -191,4 +209,3 @@ func containsPath(paths []string, path string) bool {
 	}
 	return false
 }
-

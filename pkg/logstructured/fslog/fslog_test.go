@@ -45,7 +45,7 @@ func TestStartLoadsExistingMetadataAndScansDirectories(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(journalDir, "0002.log"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(snapshotDir, "0001.snapshot.json"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(snapshotDir, "0001.snapshot.json"), []byte(`{"currentRevision":0,"compactRevision":0,"records":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

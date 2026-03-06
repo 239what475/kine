@@ -34,6 +34,7 @@ func (f *FSLog) Append(ctx context.Context, event *server.Event) (int64, error) 
 	f.appliedRev.Store(nextRev)
 	f.emitEvents(server.Events{eventFromOp(f.byRev[nextRev], true, true)})
 	f.cond.Broadcast()
+	f.maybeWriteSnapshotLocked(nextRev)
 	return nextRev, nil
 }
 

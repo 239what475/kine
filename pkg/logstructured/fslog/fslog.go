@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -48,12 +49,16 @@ func (f *FSLog) Start(ctx context.Context) error {
 		f.releaseResources()
 		return err
 	}
+	if err := f.loadLatestSnapshot(); err != nil {
+		f.releaseResources()
+		return err
+	}
 	if err := f.replayJournal(); err != nil {
 		f.releaseResources()
 		return err
 	}
 
-	currentRev := maxInt64(f.metadata.CurrentRevision, f.replayedRevision)
+	currentRev := maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
 	f.currentRev.Store(currentRev)
 	f.compactRev.Store(f.metadata.CompactRevision)
 	f.appliedRev.Store(currentRev)
@@ -122,11 +127,11 @@ func (f *FSLog) loadMetadata() error {
 }
 
 func (f *FSLog) scanState() error {
-	snapshots, err := collectFileNames(f.snapshotDir)
+	snapshots, err := collectFileNames(f.snapshotDir, snapshotFileSuffix)
 	if err != nil {
 		return fmt.Errorf("scan snapshot directory: %w", err)
 	}
-	journals, err := collectFileNames(f.journalDir)
+	journals, err := collectFileNames(f.journalDir, journalFileSuffix)
 	if err != nil {
 		return fmt.Errorf("scan journal directory: %w", err)
 	}
@@ -138,7 +143,7 @@ func (f *FSLog) scanState() error {
 	return nil
 }
 
-func collectFileNames(dir string) ([]string, error) {
+func collectFileNames(dir string, suffix string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -148,7 +153,14 @@ func collectFileNames(dir string) ([]string, error) {
 		if entry.IsDir() {
 			continue
 		}
-		files = append(files, filepath.Join(dir, entry.Name()))
+		name := entry.Name()
+		if strings.HasSuffix(name, tempFileSuffix) {
+			continue
+		}
+		if suffix != "" && !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		files = append(files, filepath.Join(dir, name))
 	}
 	sort.Strings(files)
 	return files, nil

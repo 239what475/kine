@@ -18,6 +18,9 @@ const (
 	metadataFileName = "metadata.json"
 	journalDirName   = "journal"
 	snapshotDirName  = "snapshots"
+	journalFileSuffix = ".log"
+	snapshotFileSuffix = ".snapshot.json"
+	tempFileSuffix = ".tmp"
 )
 
 type Config struct {
@@ -43,6 +46,12 @@ type JournalRecord struct {
 	Lease          int64  `json:"lease,omitempty"`
 	Value          []byte `json:"value,omitempty"`
 	PrevValue      []byte `json:"prevValue,omitempty"`
+}
+
+type SnapshotFile struct {
+	CurrentRevision int64           `json:"currentRevision"`
+	CompactRevision int64           `json:"compactRevision"`
+	Records         []JournalRecord `json:"records"`
 }
 
 type revOp struct {
@@ -104,6 +113,7 @@ type FSLog struct {
 	segmentName      string
 	segmentSize      int64
 	segmentStartRev  int64
+	loadedSnapshotRev int64
 	replayedRevision int64
 }
 
