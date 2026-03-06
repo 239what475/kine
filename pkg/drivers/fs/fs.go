@@ -19,13 +19,12 @@ func New(ctx context.Context, wg *sync.WaitGroup, cfg *drivers.Config) (bool, se
 	_ = ctx
 	_ = wg
 
-	backend := logstructured.New(fslog.New(fslog.Config{
-		RootDir:        cfg.DataSourceName,
-		SyncEveryWrite: true,
-		SnapshotEvery:  defaultSnapshotEvery,
-		SegmentBytes:   defaultSegmentBytes,
-	}))
+	backendConfig, err := ParseConfig(cfg)
+	if err != nil {
+		return false, nil, err
+	}
 
+	backend := logstructured.New(fslog.New(backendConfig))
 	return false, backend, nil
 }
 
