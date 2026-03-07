@@ -16,6 +16,8 @@
   - snapshot、compaction、当前取舍与已知限制
 - `06-testing-and-roadmap.md`
   - 测试布局、当前验证路径、本地 Python 依赖约定、后续收尾方向
+- `07-test-run-fs-flow.md`
+  - `scripts/test fs` 到 `test-run-fs` 的完整执行链路、关键脚本职责与实际测试内容
 
 ## 当前约束
 

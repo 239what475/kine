@@ -28,6 +28,45 @@
     00000000000000005001.log
 ```
 
+## 存储架构图
+
+下面这张图展示了 `FSLog` 在运行时如何同时维护内存状态和磁盘状态，以及启动恢复时如何从 snapshot 与 journal 重建索引。
+
+```mermaid
+flowchart LR
+    subgraph Memory[内存状态]
+        ByKey["byKey<br/>key -> revOp 历史"]
+        ByRev["byRev<br/>revision -> revOp"]
+        Revs["currentRev / compactRev / appliedRev"]
+    end
+
+    subgraph FS[FSLog]
+        Core["FSLog 核心逻辑"]
+    end
+
+    subgraph Disk[rootDir]
+        Lock["LOCK"]
+        Current["CURRENT<br/>当前保留，恢复不依赖"]
+        Meta["metadata.json"]
+        Snap["snapshots/*.snapshot.json"]
+        Journal["journal/*.log"]
+    end
+
+    Core --> ByKey
+    Core --> ByRev
+    Core --> Revs
+
+    Core --> Lock
+    Core --> Current
+    Core --> Meta
+    Core --> Snap
+    Core --> Journal
+
+    Snap -.启动加载基线.-> Core
+    Journal -.回放增量历史.-> Core
+    Revs -.持久化当前边界.-> Meta
+```
+
 ## 各文件职责
 
 - `LOCK`

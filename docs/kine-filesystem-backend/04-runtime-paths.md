@@ -17,6 +17,37 @@
 
 其中“startup compatibility record”当前指内部 `compact_rev_key`，用来让 fresh store 启动基线与现有 Kine 后端保持一致。
 
+## 运行时架构图
+
+下面这张图用于帮助阅读者快速区分三类运行时路径：写入路径、读取路径、以及 watch/同步路径。
+
+```mermaid
+flowchart TD
+    Runtime["FSLog 运行时"]
+
+    Runtime --> WriteHead["写入"]
+    WriteHead --> LockW["获取写锁"]
+    LockW --> Normalize["读取当前状态并归一化"]
+    Normalize --> Persist["追加 journal / metadata"]
+    Persist --> Apply["更新 byKey / byRev"]
+    Apply --> Advance["推进 currentRev / appliedRev"]
+    Advance --> Notify["广播事件"]
+    Notify --> MaybeSnap["必要时生成 snapshot"]
+
+    MaybeSnap -.同级的另一类路径.-> ReadHead["读取"]
+    ReadHead --> ListCount["List / Count"]
+    ListCount --> View["选择当前/历史视图"]
+    View --> ScanKeys["遍历 byKey 输出结果"]
+    ReadHead --> After["After(revision)"]
+    After --> ScanRevs["遍历 byRev 回放事件"]
+
+    ScanRevs -.同级的另一类路径.-> WatchHead["Watch / 同步"]
+    WatchHead --> WatchReq["Watch(prefix)"]
+    WatchReq --> Filter["prefix 过滤并分发"]
+    WatchHead --> WaitReq["WaitForSyncTo(revision)"]
+    WaitReq --> Cond["等待目标 revision 可见"]
+```
+
 ## 写路径
 
 当前写路径入口是 `Append(ctx, event)`：

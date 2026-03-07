@@ -31,6 +31,27 @@ snapshot 当前保存：
 - 触发新的 snapshot
 - 删除已完全过时的旧 journal segment
 
+## Snapshot / Compaction 维护图
+
+下面这张图概括了维护路径里的两个关键动作：基于 revision 阈值生成 snapshot，以及在 compaction 后重建新的基线状态。
+
+```mermaid
+flowchart TD
+    Trigger["写入达到 snapshot_interval<br/>或显式触发 Compact"] --> Decide{"是 snapshot<br/>还是 compaction?"}
+
+    Decide -->|snapshot| BuildSnap["从当前内存状态导出基线 records"]
+    BuildSnap --> TempSnap["写入 *.tmp"]
+    TempSnap --> SyncSnap["fsync 临时文件 + rename + fsync 目录"]
+    SyncSnap --> SnapDone["新的 snapshot 生效"]
+
+    Decide -->|compaction| SafeRev["safeCompactRevision()<br/>收紧目标 compact revision"]
+    SafeRev --> Rebuild["保留 <= compactRev 的最后基线<br/>保留 > compactRev 的全部新历史"]
+    Rebuild --> UpdateIdx["重建 byKey / byRev"]
+    UpdateIdx --> UpdateMeta["更新 compactRev 与 metadata"]
+    UpdateMeta --> BuildSnap
+    UpdateMeta --> CleanupOld["删除完全过时的旧 journal segment"]
+```
+
 ## 当前取舍
 
 当前实现有意保持简单：

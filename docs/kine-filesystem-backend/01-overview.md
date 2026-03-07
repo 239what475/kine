@@ -32,6 +32,27 @@ Kine 的分层大致如下：
 - 保留 `logstructured.LogStructured`
 - 用 `fslog.FSLog` 替代 `sqllog.SQLLog`
 
+## 分层架构图
+
+下面这张图同时展示了 **启动装配路径** 和 **运行时请求路径**。需要注意的是，`pkg/drivers/fs` 主要只参与启动装配；真正处理读写语义的是 `pkg/logstructured/fslog`。
+
+```mermaid
+flowchart TD
+    Client["apiserver / etcdctl / etcd client"] --> Server["pkg/server<br/>etcd gRPC 兼容层"]
+
+    subgraph Startup[启动装配]
+        Endpoint["endpoint.Listen"] --> Factory["pkg/drivers.New"]
+        Factory --> Driver["pkg/drivers/fs<br/>解析 fs:// DSN 并注册驱动"]
+        Driver --> Built["logstructured.New(fslog.New(...))"]
+    end
+
+    Server --> Runtime["pkg/logstructured.LogStructured<br/>MVCC 语义层"]
+    Built -.构造出最终后端实例.-> Runtime
+    Runtime --> FSLog["pkg/logstructured/fslog.FSLog<br/>文件后端实现"]
+    FSLog --> Memory["内存状态<br/>byKey / byRev / currentRev / compactRev / appliedRev"]
+    FSLog --> Disk["磁盘状态<br/>journal / snapshots / metadata.json / LOCK"]
+```
+
 ## 当前已实现能力
 
 当前实现已经具备以下能力：
