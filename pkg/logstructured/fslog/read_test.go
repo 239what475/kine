@@ -9,8 +9,10 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 )
 
+// TestListCountAndCurrentRevision 验证当前视图下的 list、count 和 current revision 行为。
 func TestListCountAndCurrentRevision(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
+	// fresh store 启动时已经包含 compact_rev_key 基线，因此后续 revision 都从这个基础上累加。
 	baseRev, err := log.CurrentRevision(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -81,6 +83,7 @@ func TestListCountAndCurrentRevision(t *testing.T) {
 	}
 }
 
+// TestAfterReturnsOrderedEvents 验证 After 会按 revision 顺序回放事件，并保留 create/update/delete 语义。
 func TestAfterReturnsOrderedEvents(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	baseRev, err := log.CurrentRevision(context.Background())
@@ -121,6 +124,7 @@ func TestAfterReturnsOrderedEvents(t *testing.T) {
 	}
 }
 
+// TestListHandlesEscapedExactKeyAndRevisionErrors 验证精确 key 转义、future rev 和 compacted rev 的返回值。
 func TestListHandlesEscapedExactKeyAndRevisionErrors(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	baseRev, err := log.CurrentRevision(context.Background())
@@ -129,6 +133,7 @@ func TestListHandlesEscapedExactKeyAndRevisionErrors(t *testing.T) {
 	}
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a_b", Value: []byte("v1")}})
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/c", Value: []byte("v2")}})
+	// 人工推进 compactRev，用来验证旧 revision 会返回 ErrCompacted。
 	log.compactRev.Store(baseRev + 1)
 
 	_, events, err := log.List(context.Background(), "/a^_b", "", 1, 0, false, false)
@@ -158,6 +163,7 @@ func TestListHandlesEscapedExactKeyAndRevisionErrors(t *testing.T) {
 	}
 }
 
+// newStartedFSLogForReadTests 创建一个已启动的 FSLog，供读路径和 watch 测试共用。
 func newStartedFSLogForReadTests(t *testing.T) *FSLog {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -170,6 +176,7 @@ func newStartedFSLogForReadTests(t *testing.T) *FSLog {
 	return log
 }
 
+// mustAppendEvent 包装 Append，测试里直接拿返回 revision 做断言。
 func mustAppendEvent(t *testing.T, log *FSLog, event *server.Event) int64 {
 	t.Helper()
 	rev, err := log.Append(context.Background(), event)
@@ -179,6 +186,7 @@ func mustAppendEvent(t *testing.T, log *FSLog, event *server.Event) int64 {
 	return rev
 }
 
+// assertEventKeys 把事件序列转成 key 列表，便于验证顺序和过滤结果。
 func assertEventKeys(t *testing.T, events server.Events, expected ...string) {
 	t.Helper()
 	keys := make([]string, 0, len(events))
@@ -190,6 +198,7 @@ func assertEventKeys(t *testing.T, events server.Events, expected ...string) {
 	}
 }
 
+// TestListAndCountUseContinueTokenStartKey 验证带 \x00 的 startKey 会按 continue token 语义跳过当前 key。
 func TestListAndCountUseContinueTokenStartKey(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	baseRev, err := log.CurrentRevision(context.Background())
@@ -219,6 +228,7 @@ func TestListAndCountUseContinueTokenStartKey(t *testing.T) {
 	}
 }
 
+// TestListAndCountKeepInclusiveStartKey 验证普通 startKey 仍保持包含边界的历史兼容语义。
 func TestListAndCountKeepInclusiveStartKey(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	baseRev, err := log.CurrentRevision(context.Background())
@@ -248,6 +258,7 @@ func TestListAndCountKeepInclusiveStartKey(t *testing.T) {
 	}
 }
 
+// TestLegacyRootListCompatibilityForTTL 验证 legacy root list 兼容逻辑，确保 TTL bootstrap 仍能分页扫描。
 func TestLegacyRootListCompatibilityForTTL(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	baseRev, err := log.CurrentRevision(context.Background())
@@ -259,6 +270,7 @@ func TestLegacyRootListCompatibilityForTTL(t *testing.T) {
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/pods/a", Value: []byte("a1")}})
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/pods/b", Value: []byte("b1")}})
 
+	// limit=1 时仍保持精确 key 语义，不能把 "/" 直接当成全前缀扫描。
 	rev, exact, err := log.List(context.Background(), "/", "", 1, 0, false, false)
 	if err != nil {
 		t.Fatal(err)
@@ -270,6 +282,7 @@ func TestLegacyRootListCompatibilityForTTL(t *testing.T) {
 		t.Fatalf("expected exact list for / to stay empty, got %d events", len(exact))
 	}
 
+	// limit 足够大时，legacy root list 会切到兼容模式，把 "/" 当作 root 前缀。
 	rev, page, err := log.List(context.Background(), "/", "", 1000, 0, false, false)
 	if err != nil {
 		t.Fatal(err)

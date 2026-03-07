@@ -10,9 +10,11 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 )
 
+// TestSnapshotWrittenAtConfiguredInterval 验证达到阈值后会立刻写出 snapshot，并切换到新 segment。
 func TestSnapshotWrittenAtConfiguredInterval(t *testing.T) {
 	log := newStartedFSLogWithConfig(t, Config{RootDir: t.TempDir(), SegmentBytes: 1 << 20, SyncEveryWrite: true, SnapshotEvery: 2})
 
+	// 两次写入同一个 key，第二次写入后就满足 SnapshotEvery=2 的触发条件。
 	createRev := mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/snap/a", Value: []byte("one")}})
 	mustAppendEvent(t, log, &server.Event{KV: &server.KeyValue{Key: "/snap/a", Value: []byte("two"), CreateRevision: createRev}, PrevKV: &server.KeyValue{Key: "/snap/a", Value: []byte("one"), CreateRevision: createRev, ModRevision: createRev}})
 
@@ -38,6 +40,7 @@ func TestSnapshotWrittenAtConfiguredInterval(t *testing.T) {
 	}
 }
 
+// TestSnapshotAndJournalRecovery 验证重启时会先加载 snapshot，再回放后续 journal。
 func TestSnapshotAndJournalRecovery(t *testing.T) {
 	rootDir := t.TempDir()
 	log := newStartedFSLogWithConfig(t, Config{RootDir: rootDir, SegmentBytes: 1 << 20, SyncEveryWrite: true, SnapshotEvery: 2})
@@ -46,6 +49,7 @@ func TestSnapshotAndJournalRecovery(t *testing.T) {
 	mustAppendEvent(t, log, &server.Event{KV: &server.KeyValue{Key: "/snap/a", Value: []byte("two"), CreateRevision: createRev}, PrevKV: &server.KeyValue{Key: "/snap/a", Value: []byte("one"), CreateRevision: createRev, ModRevision: createRev}})
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/snap/b", Value: []byte("three")}})
 
+	// snapshot 之后故意污染旧 segment，确认恢复过程会跳过已经被 snapshot 覆盖的历史文件。
 	oldSegment := filepath.Join(log.journalDir, segmentNameForRevision(1))
 	if err := os.WriteFile(oldSegment, []byte("corrupted old segment should be skipped"), 0o600); err != nil {
 		t.Fatal(err)
@@ -81,6 +85,7 @@ func TestSnapshotAndJournalRecovery(t *testing.T) {
 	}
 }
 
+// TestStartupIgnoresInterruptedSnapshotTempFile 验证启动时会忽略未完成的临时 snapshot 文件。
 func TestStartupIgnoresInterruptedSnapshotTempFile(t *testing.T) {
 	rootDir := t.TempDir()
 	log := newStartedFSLogWithConfig(t, Config{RootDir: rootDir, SegmentBytes: 1 << 20, SyncEveryWrite: true, SnapshotEvery: 2})
@@ -105,6 +110,7 @@ func TestStartupIgnoresInterruptedSnapshotTempFile(t *testing.T) {
 	}
 }
 
+// newStartedFSLogWithConfig 创建一个已经 Start 完成的 FSLog，供多组测试复用。
 func newStartedFSLogWithConfig(t *testing.T, config Config) *FSLog {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

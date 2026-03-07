@@ -14,7 +14,10 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+// TestFilesystemBackendIntegration 走一条最完整的端到端链路：
+// Put -> Get -> Watch -> Prefix List -> Compact。
 func TestFilesystemBackendIntegration(t *testing.T) {
+	// 通过 testserver 在进程内启动一个 fs backend，并把数据目录指向临时目录。
 	rootDir := filepath.Join(t.TempDir(), "fs-data")
 	t.Setenv("KINE_ENDPOINT", (&url.URL{Scheme: "fs", Path: rootDir}).String())
 	t.Setenv("KINE_COMPACT_INTERVAL", "0")
@@ -23,6 +26,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	cfg := testserver.NewTestConfig(t)
 	cfg.ListenClientUrls = []url.URL{{Scheme: "unix", Path: filepath.Join(t.TempDir(), "kine.sock")}}
 
+	// RunEtcd 会启动 kine 的 etcd 兼容服务，并返回 etcd client。
 	client := testserver.RunEtcd(t, cfg)
 	t.Cleanup(func() {
 		_ = client.Close()
@@ -31,6 +35,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
 
+	// 先创建一个 key，后面用它的 revision 作为 watch 和 compact 的基线。
 	createResp, err := client.Put(ctx, "/stage10/foo", "one")
 	if err != nil {
 		t.Fatalf("put initial key: %v", err)
@@ -50,6 +55,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 		t.Fatalf("expected mod revision %d, got %d", createResp.Header.Revision, getResp.Kvs[0].ModRevision)
 	}
 
+	// 从创建之后的 revision 开始 watch，确保只接收到后续更新事件。
 	watchCtx, watchCancel := context.WithCancel(ctx)
 	defer watchCancel()
 	watchCh := client.Watch(watchCtx, "/stage10/", clientv3.WithPrefix(), clientv3.WithRev(createResp.Header.Revision+1))
@@ -77,6 +83,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 		t.Fatalf("expected watched revision %d, got %d", updateResp.Header.Revision, watchEvent.Kv.ModRevision)
 	}
 
+	// 再写入一个同前缀 key，用来验证 prefix list 能看到完整当前视图。
 	if _, err := client.Put(ctx, "/stage10/bar", "three"); err != nil {
 		t.Fatalf("put second prefixed key: %v", err)
 	}
@@ -89,6 +96,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 		t.Fatalf("expected 2 prefixed keys, got %d", len(listResp.Kvs))
 	}
 
+	// compact 到第一次更新的位置后，旧 revision 的历史读取应该返回 ErrCompacted。
 	if _, err := client.Compact(ctx, updateResp.Header.Revision); err != nil {
 		t.Fatalf("compact backend at revision %d: %v", updateResp.Header.Revision, err)
 	}
@@ -98,6 +106,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	}
 }
 
+// nextWatchResponse 统一等待一条 watch 响应，并把超时/错误转成测试失败。
 func nextWatchResponse(t *testing.T, watchCh clientv3.WatchChan) clientv3.WatchResponse {
 	t.Helper()
 
@@ -119,6 +128,7 @@ func nextWatchResponse(t *testing.T, watchCh clientv3.WatchChan) clientv3.WatchR
 	}
 }
 
+// TestFilesystemBackendTTLIntegration 验证 lease 过期后，key 会被后台 TTL 逻辑删除。
 func TestFilesystemBackendTTLIntegration(t *testing.T) {
 	rootDir := filepath.Join(t.TempDir(), "fs-data")
 	t.Setenv("KINE_ENDPOINT", (&url.URL{Scheme: "fs", Path: rootDir}).String())
@@ -136,6 +146,7 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 
+	// 先申请一个 1 秒 lease，再把 key 绑定到这个 lease 上。
 	leaseResp, err := client.Lease.Grant(ctx, 1)
 	if err != nil {
 		t.Fatalf("grant lease: %v", err)
@@ -146,6 +157,7 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 		t.Fatalf("put key with lease: %v", err)
 	}
 
+	// 从 put 之后开始 watch，应该只看到 TTL 删除事件。
 	watchCtx, watchCancel := context.WithCancel(ctx)
 	defer watchCancel()
 	watchCh := client.Client.Watch(watchCtx, "/stage10/ttl", clientv3.WithRev(putResp.Header.Revision+1))
@@ -162,6 +174,7 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 		t.Fatalf("expected ttl watch key %q, got %q", "/stage10/ttl", key)
 	}
 
+	// 删除事件到达后，再确认当前视图里已经看不到这个 key。
 	getResp, err := client.Client.Get(ctx, "/stage10/ttl")
 	if err != nil {
 		t.Fatalf("get ttl key after delete: %v", err)
@@ -171,6 +184,7 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 	}
 }
 
+// TestFilesystemBackendExactSlashKeyIntegration 验证精确读取 "/pods/" 不会误命中子 key。
 func TestFilesystemBackendExactSlashKeyIntegration(t *testing.T) {
 	rootDir := filepath.Join(t.TempDir(), "fs-data")
 	t.Setenv("KINE_ENDPOINT", (&url.URL{Scheme: "fs", Path: rootDir}).String())
@@ -195,6 +209,7 @@ func TestFilesystemBackendExactSlashKeyIntegration(t *testing.T) {
 		t.Fatalf("put sibling key: %v", err)
 	}
 
+	// 这里故意不用 WithPrefix，检查 "/pods/" 仍保持精确 key 语义。
 	getResp, err := client.Client.Get(ctx, "/pods/")
 	if err != nil {
 		t.Fatalf("exact get on /pods/: %v", err)
@@ -204,6 +219,7 @@ func TestFilesystemBackendExactSlashKeyIntegration(t *testing.T) {
 	}
 }
 
+// TestFilesystemBackendHistoricalLimitedPrefixCount 验证历史 revision + prefix + limit 的组合语义。
 func TestFilesystemBackendHistoricalLimitedPrefixCount(t *testing.T) {
 	rootDir := filepath.Join(t.TempDir(), "fs-data")
 	t.Setenv("KINE_ENDPOINT", (&url.URL{Scheme: "fs", Path: rootDir}).String())
@@ -232,6 +248,7 @@ func TestFilesystemBackendHistoricalLimitedPrefixCount(t *testing.T) {
 		t.Fatalf("put third key: %v", err)
 	}
 
+	// 记录第三次写入后的 revision，后面所有历史 list 都固定在这个时间点观察。
 	historicalRev := thirdResp.Header.Revision
 
 	if _, err := client.Client.Put(ctx, "/pods/d", "d"); err != nil {
@@ -241,6 +258,7 @@ func TestFilesystemBackendHistoricalLimitedPrefixCount(t *testing.T) {
 		t.Fatalf("put fifth key: %v", err)
 	}
 
+	// 在历史 revision 上做带 limit 的 prefix list，既要返回当前页，也要带上完整 count/more。
 	resp, err := client.Client.Get(ctx, "/pods/", clientv3.WithPrefix(), clientv3.WithRev(historicalRev), clientv3.WithLimit(2))
 	if err != nil {
 		t.Fatalf("historical limited prefix get: %v", err)

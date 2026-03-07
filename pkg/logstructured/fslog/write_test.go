@@ -9,10 +9,12 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 )
 
+// TestBackendCRUDSemantics 通过 logstructured.Backend 验证 create/update/delete/get 的对外语义。
 func TestBackendCRUDSemantics(t *testing.T) {
 	ctx := context.Background()
 	backend := newBackendForWriteTests(t)
 
+	// 先记录 fresh store 的基线 revision，后续所有断言都基于它递增。
 	baseRev, err := backend.CurrentRevision(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -26,6 +28,7 @@ func TestBackendCRUDSemantics(t *testing.T) {
 		t.Fatalf("expected create rev %d, got %d", baseRev+1, rev)
 	}
 
+	// 重复创建同一个 key，应该走到 ErrKeyExists。
 	_, err = backend.Create(ctx, "/test/a", []byte("again"), 0)
 	if !errors.Is(err, server.ErrKeyExists) {
 		t.Fatalf("expected duplicate create to return ErrKeyExists, got %v", err)
@@ -54,6 +57,7 @@ func TestBackendCRUDSemantics(t *testing.T) {
 		t.Fatalf("expected lease 0 after update, got %d", kv.Lease)
 	}
 
+	// 用陈旧 revision 更新，应该失败并返回当前最新值。
 	staleRev, staleKV, ok, err := backend.Update(ctx, "/test/a", []byte("stale"), rev, 1)
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +72,7 @@ func TestBackendCRUDSemantics(t *testing.T) {
 		t.Fatalf("expected stale update to return latest kv, got %+v", staleKV)
 	}
 
+	// 删除也要先验证 revision 比较逻辑：陈旧 revision 不允许删掉最新值。
 	deleteRev, deletedKV, ok, err := backend.Delete(ctx, "/test/a", rev)
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +112,7 @@ func TestBackendCRUDSemantics(t *testing.T) {
 		t.Fatalf("expected deleted key to be hidden from Get, got %+v", kvOut)
 	}
 
+	// 删除后的再次创建应该得到一个新的 CreateRevision。
 	recreateRev, err := backend.Create(ctx, "/test/a", []byte("three"), 0)
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +133,7 @@ func TestBackendCRUDSemantics(t *testing.T) {
 	}
 }
 
+// TestAppendRejectsInvalidWriteState 直接验证底层 Append 对非法状态转换的拒绝逻辑。
 func TestAppendRejectsInvalidWriteState(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	ctx := context.Background()
@@ -138,6 +145,7 @@ func TestAppendRejectsInvalidWriteState(t *testing.T) {
 		t.Fatalf("expected delete on missing key to fail with ErrWriteConflict, got %v", err)
 	}
 
+	// 先造出一个正常存在的 key，再验证重复 create 和陈旧 PrevKV 都会失败。
 	createRev := mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("one")}})
 	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("two")}}); !errors.Is(err, server.ErrKeyExists) {
 		t.Fatalf("expected duplicate append create to fail with ErrKeyExists, got %v", err)
@@ -148,6 +156,7 @@ func TestAppendRejectsInvalidWriteState(t *testing.T) {
 	}
 }
 
+// newBackendForWriteTests 创建一个带 logstructured 包装层的 backend，便于测试对外语义。
 func newBackendForWriteTests(t *testing.T) server.Backend {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())

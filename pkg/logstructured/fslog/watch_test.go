@@ -9,11 +9,13 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 )
 
+// TestWatchFromCurrentRevision 验证从当前 revision 开始 watch 时，只会收到后续新增事件。
 func TestWatchFromCurrentRevision(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 不指定历史 revision，watch 应该直接订阅实时广播流。
 	watchCh := log.Watch(ctx, "/")
 	rev := mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/watch/a", Value: []byte("one")}})
 
@@ -26,6 +28,7 @@ func TestWatchFromCurrentRevision(t *testing.T) {
 	}
 }
 
+// TestWatchFromHistoricalRevisionUsesAfterPlusWatch 验证历史 watch 会先补历史，再切到实时流。
 func TestWatchFromHistoricalRevisionUsesAfterPlusWatch(t *testing.T) {
 	ctx := context.Background()
 	backend := newBackendForWriteTests(t)
@@ -41,6 +44,7 @@ func TestWatchFromHistoricalRevisionUsesAfterPlusWatch(t *testing.T) {
 		t.Fatal("expected update to succeed")
 	}
 
+	// 从 revision=2 开始 watch，此时应该先收到 create/update 两条历史事件。
 	watchCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	wr := backend.Watch(watchCtx, "/hist/", 2)
@@ -75,6 +79,7 @@ func TestWatchFromHistoricalRevisionUsesAfterPlusWatch(t *testing.T) {
 	}
 }
 
+// TestWatchRespectsPrefix 验证 watch 的前缀过滤只放行命中的 key。
 func TestWatchRespectsPrefix(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,10 +95,12 @@ func TestWatchRespectsPrefix(t *testing.T) {
 	}
 }
 
+// TestWaitForSyncToBlocksUntilRevisionApplied 验证 WaitForSyncTo 会等到目标 revision 真正应用完成。
 func TestWaitForSyncToBlocksUntilRevisionApplied(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	finished := make(chan struct{})
 
+	// 先在后台等待 revision=2，此时 fresh store 只有 bootstrap 记录，因此应该阻塞。
 	go func() {
 		log.WaitForSyncTo(2)
 		close(finished)
@@ -115,11 +122,13 @@ func TestWaitForSyncToBlocksUntilRevisionApplied(t *testing.T) {
 	}
 }
 
+// TestWatchSlowConsumerDoesNotBlockWrites 验证慢消费者不会把写路径拖死。
 func TestWatchSlowConsumerDoesNotBlockWrites(t *testing.T) {
 	log := newStartedFSLogForReadTests(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// 这里不消费返回的 channel，模拟广播端遇到一个非常慢的 watcher。
 	_ = log.Watch(ctx, "/slow/")
 	done := make(chan struct{})
 	go func() {
@@ -136,6 +145,7 @@ func TestWatchSlowConsumerDoesNotBlockWrites(t *testing.T) {
 	}
 }
 
+// mustReceiveEvents 在统一超时时间内读取一批 watch 事件。
 func mustReceiveEvents(t *testing.T, ch <-chan server.Events) server.Events {
 	t.Helper()
 	select {

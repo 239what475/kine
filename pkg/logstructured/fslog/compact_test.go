@@ -10,9 +10,11 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 )
 
+// TestCompactReturnsErrCompactedForOldRevisionAndPreservesCurrentView 验证 compact 后旧 revision 失效，但当前视图保持正确。
 func TestCompactReturnsErrCompactedForOldRevisionAndPreservesCurrentView(t *testing.T) {
 	log := newStartedFSLogWithConfig(t, Config{RootDir: t.TempDir(), SegmentBytes: 1 << 20, SyncEveryWrite: true, SnapshotEvery: 100, CompactMinRetain: 1})
 
+	// 准备两条 key 的多版本历史，后面分别观察 compact 基线视图和当前视图。
 	createA := mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/c/a", Value: []byte("a1")}})
 	mustAppendEvent(t, log, &server.Event{KV: &server.KeyValue{Key: "/c/a", Value: []byte("a2"), CreateRevision: createA}, PrevKV: &server.KeyValue{Key: "/c/a", Value: []byte("a1"), CreateRevision: createA, ModRevision: createA}})
 	createB := mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/c/b", Value: []byte("b1")}})
@@ -62,6 +64,7 @@ func TestCompactReturnsErrCompactedForOldRevisionAndPreservesCurrentView(t *test
 	}
 }
 
+// TestCompactDropsFullyDeletedKeys 验证在 compact 边界之前已经完整删除的 key 不会进入快照基线。
 func TestCompactDropsFullyDeletedKeys(t *testing.T) {
 	log := newStartedFSLogWithConfig(t, Config{RootDir: t.TempDir(), SegmentBytes: 1 << 20, SyncEveryWrite: true, SnapshotEvery: 100, CompactMinRetain: 1})
 
@@ -94,6 +97,7 @@ func TestCompactDropsFullyDeletedKeys(t *testing.T) {
 	assertEventKeys(t, currentEvents, "/drop/b")
 }
 
+// TestCompactWritesSnapshotAndCleansOldJournals 验证 compact 会产出 snapshot，并清理被其覆盖的旧 journal。
 func TestCompactWritesSnapshotAndCleansOldJournals(t *testing.T) {
 	rootDir := t.TempDir()
 	log := newStartedFSLogWithConfig(t, Config{RootDir: rootDir, SegmentBytes: 1, SyncEveryWrite: true, SnapshotEvery: 100, CompactMinRetain: 1})
@@ -119,6 +123,7 @@ func TestCompactWritesSnapshotAndCleansOldJournals(t *testing.T) {
 		t.Fatalf("expected only compacted active segment to remain, got %+v", entries)
 	}
 
+	// 重新启动一次，确认 compact 结果不仅当前进程可见，恢复路径也能正确接上。
 	log.releaseResources()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

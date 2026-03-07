@@ -16,6 +16,10 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// New 创建一个空的 FSLog，并初始化它后续会长期使用的内存结构。
+//
+// 这里只做“对象初始化”，还不会真正接触磁盘。真正的启动恢复逻辑发生在
+// Start(...) 中。
 func New(config Config) *FSLog {
 	log := &FSLog{
 		rootDir:          config.RootDir,
@@ -32,16 +36,31 @@ func New(config Config) *FSLog {
 	return log
 }
 
+// Start 打开或创建磁盘状态，并从 snapshot + journal 中恢复出内存索引。
+//
+// 启动顺序刻意分成几个阶段：
+//  1. 确保目录存在
+//  2. 获取单写者锁
+//  3. 读取 metadata，扫描 snapshot / journal
+//  4. 先加载最新 snapshot 作为基线
+//  5. 再回放其后的 journal 增量
+//  6. 对 brand-new store 应用 Kine 兼容启动基线
 func (f *FSLog) Start(ctx context.Context) error {
 	if f.rootDir == "" {
 		return fmt.Errorf("filesystem backend requires root directory")
 	}
+
+	// 第 1 阶段：保证后续会用到的目录结构已经存在。
 	if err := f.ensureLayout(); err != nil {
 		return err
 	}
+
+	// 第 2 阶段：在真正读写共享目录之前先拿独占锁，落实“单写者”假设。
 	if err := f.acquireLock(); err != nil {
 		return err
 	}
+
+	// 第 3 阶段：读取轻量元数据，并找出当前可参与恢复的文件集合。
 	if err := f.loadMetadata(); err != nil {
 		f.releaseResources()
 		return err
@@ -50,6 +69,8 @@ func (f *FSLog) Start(ctx context.Context) error {
 		f.releaseResources()
 		return err
 	}
+
+	// 第 4 阶段：先加载最新 snapshot 作为内存基线，再回放之后的 journal。
 	if err := f.loadLatestSnapshot(); err != nil {
 		f.releaseResources()
 		return err
@@ -59,17 +80,25 @@ func (f *FSLog) Start(ctx context.Context) error {
 		return err
 	}
 
+	// currentRev 可能同时受 metadata、snapshot、journal replay 三方影响，
+	// 所以这里统一取最大值作为恢复后的可见边界。
 	currentRev := maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
+
+	// brand-new store 需要补一条兼容记录，让 fresh store 的启动 revision
+	// 语义与其他 Kine 后端保持一致。
 	if err := f.bootstrapCompatibilityRevision(currentRev); err != nil {
 		f.releaseResources()
 		return err
 	}
+
+	// 兼容记录本身可能推进了 metadata.CurrentRevision，所以这里再算一次。
 	currentRev = maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
 	f.currentRev.Store(currentRev)
 	f.compactRev.Store(f.metadata.CompactRevision)
 	f.appliedRev.Store(currentRev)
 	f.metadata.CurrentRevision = currentRev
 
+	// 后端生命周期跟随外层 context；context 结束时统一释放锁和文件句柄。
 	go func() {
 		<-ctx.Done()
 		f.releaseResources()
@@ -78,6 +107,7 @@ func (f *FSLog) Start(ctx context.Context) error {
 	return nil
 }
 
+// ensureLayout 预先创建根目录、journal 目录和 snapshot 目录。
 func (f *FSLog) ensureLayout() error {
 	for _, dir := range []string{f.rootDir, f.journalDir, f.snapshotDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -87,6 +117,8 @@ func (f *FSLog) ensureLayout() error {
 	return nil
 }
 
+// acquireLock 获取 backend 根目录上的 advisory exclusive lock。
+// 第一版就是靠它来保证“一个数据目录同一时刻只有一个写者进程”。
 func (f *FSLog) acquireLock() error {
 	file, err := os.OpenFile(f.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -103,6 +135,8 @@ func (f *FSLog) acquireLock() error {
 	return nil
 }
 
+// releaseResources 关闭活跃 segment，并释放目录锁。
+// 它是幂等的，所以重复调用也没关系。
 func (f *FSLog) releaseResources() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -115,6 +149,7 @@ func (f *FSLog) releaseResources() {
 	f.lockFile = nil
 }
 
+// loadMetadata 读取 metadata.json；如果文件不存在，就把它当成 brand-new store。
 func (f *FSLog) loadMetadata() error {
 	data, err := os.ReadFile(f.metadataPath)
 	if err != nil {
@@ -132,6 +167,7 @@ func (f *FSLog) loadMetadata() error {
 	return nil
 }
 
+// scanState 扫描当前 snapshot / journal 文件集合，并记录为有序路径列表。
 func (f *FSLog) scanState() error {
 	snapshots, err := collectFileNames(f.snapshotDir, snapshotFileSuffix)
 	if err != nil {
@@ -143,12 +179,16 @@ func (f *FSLog) scanState() error {
 	}
 	f.snapshotFiles = snapshots
 	f.journalFiles = journals
+
+	// 如果 metadata 里还没有 active segment，就默认把扫描到的最新 journal
+	// 视为当前活跃文件。
 	if f.metadata.ActiveSegment == "" && len(journals) > 0 {
 		f.metadata.ActiveSegment = filepath.Base(journals[len(journals)-1])
 	}
 	return nil
 }
 
+// collectFileNames 扫描一个目录，按后缀过滤文件，并丢掉中间临时文件。
 func collectFileNames(dir string, suffix string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -172,6 +212,7 @@ func collectFileNames(dir string, suffix string) ([]string, error) {
 	return files, nil
 }
 
+// maxInt64 是启动恢复时的小工具函数，用来合并多个来源上的 revision 边界。
 func maxInt64(a, b int64) int64 {
 	if a > b {
 		return a
@@ -179,6 +220,7 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
+// bootstrapRecord 返回 fresh store 兼容逻辑所需的那条内部记录。
 func bootstrapRecord() JournalRecord {
 	return JournalRecord{
 		Revision:       1,
@@ -189,6 +231,7 @@ func bootstrapRecord() JournalRecord {
 	}
 }
 
+// bootstrapCompatibilityRevision 在 brand-new store 上补写 Kine 历史兼容记录。
 func (f *FSLog) bootstrapCompatibilityRevision(currentRev int64) error {
 	if currentRev != 0 {
 		return nil
@@ -204,11 +247,10 @@ func (f *FSLog) bootstrapCompatibilityRevision(currentRev int64) error {
 		return nil
 	}
 
-	// Existing Kine backends start a fresh store at revision 2 before any test data is
-	// written: revision 1 is consumed by an internal compact revision key, and revision 2
-	// is used by /registry/health during LogStructured.Start. fslog keeps compact state in
-	// metadata instead of the KV history, but we still create the legacy compact_rev_key on
-	// brand-new stores so startup revision behavior stays consistent with the other backends.
+	// 现有 Kine 主要后端的 fresh store 启动时，revision 1 会被内部
+	// compact revision key 占用；随后 `/registry/health` 会落到 revision 2。
+	// fslog 实际上把 compact 状态存进 metadata，但这里仍然补写 legacy
+	// compact_rev_key，这样启动基线行为就和其他后端保持一致。
 	record := bootstrapRecord()
 	if err := f.appendRecordLocked(record); err != nil {
 		return err
@@ -218,15 +260,17 @@ func (f *FSLog) bootstrapCompatibilityRevision(currentRev int64) error {
 	return f.writeMetadataLocked()
 }
 
+// CompactRevision 返回当前 compact 到了哪个 revision。
 func (f *FSLog) CompactRevision(context.Context) (int64, error) {
 	return f.compactRev.Load(), nil
 }
 
+// CurrentRevision 返回当前对外可见的最新 revision。
 func (f *FSLog) CurrentRevision(context.Context) (int64, error) {
 	return f.currentRev.Load(), nil
 }
 
+// DbSize 当前还没有真正统计文件后端占用空间，只是满足接口要求。
 func (f *FSLog) DbSize(context.Context) (int64, error) {
 	return 0, nil
 }
-

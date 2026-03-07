@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+// TestStartCreatesDirectoryLayout 验证第一次启动会创建目录布局并持有锁文件。
 func TestStartCreatesDirectoryLayout(t *testing.T) {
 	rootDir := filepath.Join(t.TempDir(), "store")
 	log := New(Config{RootDir: rootDir})
@@ -29,6 +30,7 @@ func TestStartCreatesDirectoryLayout(t *testing.T) {
 	}
 }
 
+// TestStartLoadsExistingMetadataAndScansDirectories 验证重启时会从 metadata 和目录扫描恢复内存状态。
 func TestStartLoadsExistingMetadataAndScansDirectories(t *testing.T) {
 	rootDir := t.TempDir()
 	journalDir := filepath.Join(rootDir, journalDirName)
@@ -74,6 +76,7 @@ func TestStartLoadsExistingMetadataAndScansDirectories(t *testing.T) {
 	}
 }
 
+// TestStartRejectsLockedDirectory 验证同一个数据目录只能被一个进程持有。
 func TestStartRejectsLockedDirectory(t *testing.T) {
 	rootDir := t.TempDir()
 
@@ -92,6 +95,7 @@ func TestStartRejectsLockedDirectory(t *testing.T) {
 	}
 }
 
+// TestStartRejectsInvalidMetadata 验证损坏的 metadata 不会被静默接受。
 func TestStartRejectsInvalidMetadata(t *testing.T) {
 	rootDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(rootDir, metadataFileName), []byte(`{not-json}`), 0o600); err != nil {
@@ -107,6 +111,7 @@ func TestStartRejectsInvalidMetadata(t *testing.T) {
 	}
 }
 
+// TestStartReleasesLockOnContextCancel 验证上下文结束后锁会被释放，后续实例可以重新启动。
 func TestStartReleasesLockOnContextCancel(t *testing.T) {
 	rootDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -136,6 +141,7 @@ func TestStartReleasesLockOnContextCancel(t *testing.T) {
 	}
 }
 
+// TestStartBootstrapsCompactRevisionKeyOnFreshStore 验证 fresh store 启动时会补一条 compact_rev_key 基线记录。
 func TestStartBootstrapsCompactRevisionKeyOnFreshStore(t *testing.T) {
 	rootDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())

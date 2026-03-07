@@ -12,10 +12,12 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// snapshotNameForRevision 让 snapshot 文件名按 revision 字典序可排序。
 func snapshotNameForRevision(revision int64) string {
 	return fmt.Sprintf("%020d%s", revision, snapshotFileSuffix)
 }
 
+// maybeWriteSnapshotLocked 只在 revision 命中 snapshot_interval 边界时触发快照。
 func (f *FSLog) maybeWriteSnapshotLocked(revision int64) {
 	if f.snapshotEvery <= 0 || revision == 0 || revision%f.snapshotEvery != 0 {
 		return
@@ -23,6 +25,8 @@ func (f *FSLog) maybeWriteSnapshotLocked(revision int64) {
 	_ = f.writeSnapshotLocked(revision)
 }
 
+// writeSnapshotLocked 把“当前仍被保留的内存记录集合”整体写成一个 snapshot，
+// 然后切换到新的 journal segment。
 func (f *FSLog) writeSnapshotLocked(revision int64) error {
 	snapshot := SnapshotFile{
 		CurrentRevision: revision,
@@ -38,6 +42,7 @@ func (f *FSLog) writeSnapshotLocked(revision int64) error {
 		return fmt.Errorf("encode snapshot: %w", err)
 	}
 
+	// 先写临时文件，再 rename 成正式文件，避免留下半写入的快照文件。
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("open snapshot temp file %q: %w", tmpPath, err)
@@ -65,6 +70,8 @@ func (f *FSLog) writeSnapshotLocked(revision int64) error {
 		sort.Strings(f.snapshotFiles)
 	}
 
+	// snapshot 落稳之后，把 journal 切到下一个 revision 开始的新 segment，
+	// 这样后续 replay 更容易跳过旧历史。
 	f.closeSegmentLocked()
 	nextSegment := segmentNameForRevision(revision + 1)
 	if err := f.openSegmentLocked(nextSegment, revision+1); err != nil {
@@ -77,6 +84,7 @@ func (f *FSLog) writeSnapshotLocked(revision int64) error {
 	return f.writeMetadataLocked()
 }
 
+// snapshotRecordsLocked 把当前 revision 以内、仍保留在 byRev 中的记录导出到 snapshot。
 func (f *FSLog) snapshotRecordsLocked(revision int64) []JournalRecord {
 	revisions := make([]int64, 0, len(f.byRev))
 	for rev := range f.byRev {
@@ -92,6 +100,7 @@ func (f *FSLog) snapshotRecordsLocked(revision int64) []JournalRecord {
 	return records
 }
 
+// loadLatestSnapshot 把最新的 snapshot 加载成当前内存索引的起点状态。
 func (f *FSLog) loadLatestSnapshot() error {
 	f.loadedSnapshotRev = 0
 	if len(f.snapshotFiles) == 0 {
@@ -107,6 +116,7 @@ func (f *FSLog) loadLatestSnapshot() error {
 		return fmt.Errorf("decode snapshot %q: %w", path, err)
 	}
 
+	// snapshot 直接替换当前内存基线；之后 journal replay 再叠加更新的历史。
 	f.byKey = btree.NewMap[string, []*revOp](0)
 	f.byRev = map[int64]*revOp{}
 	for _, record := range snapshot.Records {
@@ -119,12 +129,16 @@ func (f *FSLog) loadLatestSnapshot() error {
 	if snapshot.CompactRevision > f.metadata.CompactRevision {
 		f.metadata.CompactRevision = snapshot.CompactRevision
 	}
+
+	// 如果 metadata 里记录的 active segment 已经完全被 snapshot 覆盖掉，
+	// 就清空这个提示，让后续 replay / reopen 自行选择合适的文件。
 	if activeStart, ok := parseRevisionPrefix(f.metadata.ActiveSegment, journalFileSuffix); ok && activeStart <= snapshot.CurrentRevision {
 		f.metadata.ActiveSegment = ""
 	}
 	return nil
 }
 
+// recordFromOp 把内存中的 revOp 转回稳定的记录格式，供 snapshot / journal 使用。
 func recordFromOp(op *revOp) JournalRecord {
 	if op == nil {
 		return JournalRecord{}
@@ -142,6 +156,7 @@ func recordFromOp(op *revOp) JournalRecord {
 	}
 }
 
+// parseRevisionPrefix 从类似 `00000000000000001000.log` 的文件名中解析 revision 前缀。
 func parseRevisionPrefix(path string, suffix string) (int64, bool) {
 	name := filepath.Base(path)
 	if !strings.HasSuffix(name, suffix) {
@@ -155,6 +170,7 @@ func parseRevisionPrefix(path string, suffix string) (int64, bool) {
 	return rev, true
 }
 
+// syncDir 对目录本身做 fsync，保证 rename / create 这类目录项更新真正落盘。
 func syncDir(dir string) error {
 	file, err := os.Open(dir)
 	if err != nil {

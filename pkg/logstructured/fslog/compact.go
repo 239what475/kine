@@ -9,6 +9,8 @@ import (
 	"github.com/tidwall/btree"
 )
 
+// safeCompactRevision 会把请求的 compact revision 收紧到安全范围内，
+// 避免越过 `compact_min_retain` 要求保留的历史窗口。
 func safeCompactRevision(targetCompactRev int64, currentRev int64, compactMinRetain int64) int64 {
 	safeRev := currentRev - compactMinRetain
 	if targetCompactRev < safeRev {
@@ -20,6 +22,7 @@ func safeCompactRevision(targetCompactRev int64, currentRev int64, compactMinRet
 	return safeRev
 }
 
+// Compact 在新的 compaction 边界上重建内存基线、写出 snapshot，并清理旧 journal。
 func (f *FSLog) Compact(ctx context.Context, targetCompactRev int64) (int64, error) {
 	_ = ctx
 
@@ -31,11 +34,13 @@ func (f *FSLog) Compact(ctx context.Context, targetCompactRev int64) (int64, err
 		return 0, nil
 	}
 
+	// 先把调用方请求的 compact revision 收紧成一个安全值。
 	targetCompactRev = safeCompactRevision(targetCompactRev, currentRev, f.compactMinRetain)
 	if targetCompactRev <= f.compactRev.Load() {
 		return currentRev, nil
 	}
 
+	// 先重建内存基线，再写 snapshot，最后删掉彻底过时的 journal 文件。
 	f.compactLocked(targetCompactRev)
 	f.compactRev.Store(targetCompactRev)
 	f.metadata.CompactRevision = targetCompactRev
@@ -49,6 +54,7 @@ func (f *FSLog) Compact(ctx context.Context, targetCompactRev int64) (int64, err
 	return currentRev, nil
 }
 
+// compactLocked 根据给定的 compact 边界重建 byKey / byRev 两个索引。
 func (f *FSLog) compactLocked(compactRevision int64) {
 	compactedByKey := btree.NewMap[string, []*revOp](0)
 	compactedByRev := map[int64]*revOp{}
@@ -69,11 +75,13 @@ func (f *FSLog) compactLocked(compactRevision int64) {
 	f.byRev = compactedByRev
 }
 
+// compactOps 决定某个 key 在 compaction 后还应保留哪些历史。
 func compactOps(ops []*revOp, compactRevision int64) []*revOp {
 	if len(ops) == 0 {
 		return nil
 	}
 
+	// 找到 compact 边界之前最后一条记录，它将成为这个 key 的压缩基线。
 	baselineIndex := -1
 	for index := len(ops) - 1; index >= 0; index-- {
 		if ops[index].revision <= compactRevision {
@@ -85,6 +93,9 @@ func compactOps(ops []*revOp, compactRevision int64) []*revOp {
 	result := make([]*revOp, 0, len(ops))
 	if baselineIndex >= 0 {
 		baseline := ops[baselineIndex]
+
+		// 如果基线本身是 delete，说明 compact 后这个 key 应该先消失，除非后面
+		// 有更新的 recreate 记录。
 		if !baseline.delete {
 			result = append(result, cloneRevOp(baseline))
 		}
@@ -96,6 +107,7 @@ func compactOps(ops []*revOp, compactRevision int64) []*revOp {
 		return result
 	}
 
+	// 如果 compact 边界之前没有任何记录，就只保留边界之后的新历史。
 	for _, op := range ops {
 		if op.revision > compactRevision {
 			result = append(result, cloneRevOp(op))
@@ -104,6 +116,7 @@ func compactOps(ops []*revOp, compactRevision int64) []*revOp {
 	return result
 }
 
+// cloneRevOp 复制一条内存记录，避免新旧索引共享同一个底层对象。
 func cloneRevOp(op *revOp) *revOp {
 	if op == nil {
 		return nil
@@ -121,6 +134,7 @@ func cloneRevOp(op *revOp) *revOp {
 	}
 }
 
+// cleanupCompactedJournalLocked 删除已经完全过时的 journal 文件，只保留活跃 segment。
 func (f *FSLog) cleanupCompactedJournalLocked() error {
 	activePath := filepath.Join(f.journalDir, f.metadata.ActiveSegment)
 	for _, path := range f.journalFiles {

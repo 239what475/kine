@@ -10,6 +10,7 @@ import (
 	"github.com/k3s-io/kine/pkg/server"
 )
 
+// TestAppendCreatesJournalAndMetadata 验证一次写入会同时更新 journal 和 metadata。
 func TestAppendCreatesJournalAndMetadata(t *testing.T) {
 	rootDir := t.TempDir()
 	log := New(Config{RootDir: rootDir, SegmentBytes: 1 << 20, SyncEveryWrite: true})
@@ -43,6 +44,7 @@ func TestAppendCreatesJournalAndMetadata(t *testing.T) {
 	}
 }
 
+// TestAppendReplayOnRestart 验证重启后会从 journal 里把 revision 和索引完整回放回来。
 func TestAppendReplayOnRestart(t *testing.T) {
 	rootDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,6 +77,7 @@ func TestAppendReplayOnRestart(t *testing.T) {
 	}
 }
 
+// TestAppendRotatesSegment 验证 segment 达到阈值后会滚动到下一个文件。
 func TestAppendRotatesSegment(t *testing.T) {
 	rootDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -94,6 +97,7 @@ func TestAppendRotatesSegment(t *testing.T) {
 	}
 }
 
+// TestReplayTruncatesPartialFinalLine 验证宕机留下的半行 JSON 会在恢复时被截断。
 func TestReplayTruncatesPartialFinalLine(t *testing.T) {
 	rootDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -105,6 +109,7 @@ func TestReplayTruncatesPartialFinalLine(t *testing.T) {
 	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/a", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
+	// 人工制造一个只写了一半的尾记录，模拟崩溃打断写入。
 	segmentPath := filepath.Join(log.journalDir, log.metadata.ActiveSegment)
 	if file, err := os.OpenFile(segmentPath, os.O_WRONLY|os.O_APPEND, 0); err != nil {
 		t.Fatal(err)

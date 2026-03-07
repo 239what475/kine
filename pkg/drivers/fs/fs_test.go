@@ -6,7 +6,9 @@ import (
 	"github.com/k3s-io/kine/pkg/drivers"
 )
 
+// TestParseConfigDefaults 验证最简单的绝对路径 DSN 会落到默认配置。
 func TestParseConfigDefaults(t *testing.T) {
+	// 只提供 rootDir 时，驱动层应该补齐默认的写盘、快照和 segment 配置。
 	config, err := ParseConfig(&drivers.Config{Endpoint: "fs:///var/lib/kine"})
 	if err != nil {
 		t.Fatal(err)
@@ -25,6 +27,7 @@ func TestParseConfigDefaults(t *testing.T) {
 	}
 }
 
+// TestParseConfigQueryOverrides 验证 query 参数能覆盖默认值。
 func TestParseConfigQueryOverrides(t *testing.T) {
 	config, err := ParseConfig(&drivers.Config{Endpoint: "fs:///tmp/kine-dev?sync=false&snapshot_interval=42&segment_bytes=8192"})
 	if err != nil {
@@ -44,25 +47,33 @@ func TestParseConfigQueryOverrides(t *testing.T) {
 	}
 }
 
+// TestParseConfigRejectsEmptyEndpoint 验证没有 endpoint 时直接报错。
 func TestParseConfigRejectsEmptyEndpoint(t *testing.T) {
 	if _, err := ParseConfig(&drivers.Config{}); err == nil {
 		t.Fatal("expected error for empty endpoint")
 	}
 }
 
+// TestParseConfigRejectsRelativeLikePath 验证第一版不接受类似相对路径的写法。
 func TestParseConfigRejectsRelativeLikePath(t *testing.T) {
 	if _, err := ParseConfig(&drivers.Config{Endpoint: "fs://./data/kine"}); err == nil {
 		t.Fatal("expected error for relative-like path")
 	}
 }
 
+// TestParseConfigRejectsUnknownQueryParameter 验证未知 query 参数不会被静默忽略。
 func TestParseConfigRejectsUnknownQueryParameter(t *testing.T) {
 	if _, err := ParseConfig(&drivers.Config{Endpoint: "fs:///var/lib/kine?unknown=1"}); err == nil {
 		t.Fatal("expected error for unknown query parameter")
 	}
 }
 
+// TestParseConfigRejectsInvalidValues 验证各类非法参数值都会被拒绝。
 func TestParseConfigRejectsInvalidValues(t *testing.T) {
+	// 这里分别覆盖三类非法输入：
+	// 1. `sync=maybe`：`sync` 只接受布尔值，`maybe` 不是合法布尔字面量。
+	// 2. `snapshot_interval=0`：快照间隔必须大于 0，0 没有意义。
+	// 3. `segment_bytes=-1`：segment 大小不能为负数。
 	tests := []string{
 		"fs:///var/lib/kine?sync=maybe",
 		"fs:///var/lib/kine?snapshot_interval=0",
