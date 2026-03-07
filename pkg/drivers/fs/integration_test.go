@@ -36,12 +36,12 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	defer cancel()
 
 	// 先创建一个 key，后面用它的 revision 作为 watch 和 compact 的基线。
-	createResp, err := client.Put(ctx, "/stage10/foo", "one")
+	createResp, err := client.Put(ctx, "/integration/foo", "one")
 	if err != nil {
 		t.Fatalf("put initial key: %v", err)
 	}
 
-	getResp, err := client.Client.Get(ctx, "/stage10/foo")
+	getResp, err := client.Client.Get(ctx, "/integration/foo")
 	if err != nil {
 		t.Fatalf("get initial key: %v", err)
 	}
@@ -58,9 +58,9 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	// 从创建之后的 revision 开始 watch，确保只接收到后续更新事件。
 	watchCtx, watchCancel := context.WithCancel(ctx)
 	defer watchCancel()
-	watchCh := client.Watch(watchCtx, "/stage10/", clientv3.WithPrefix(), clientv3.WithRev(createResp.Header.Revision+1))
+	watchCh := client.Watch(watchCtx, "/integration/", clientv3.WithPrefix(), clientv3.WithRev(createResp.Header.Revision+1))
 
-	updateResp, err := client.Put(ctx, "/stage10/foo", "two")
+	updateResp, err := client.Put(ctx, "/integration/foo", "two")
 	if err != nil {
 		t.Fatalf("update watched key: %v", err)
 	}
@@ -73,8 +73,8 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	if watchEvent.Type != mvccpb.PUT {
 		t.Fatalf("expected PUT watch event, got %s", watchEvent.Type)
 	}
-	if key := string(watchEvent.Kv.Key); key != "/stage10/foo" {
-		t.Fatalf("expected watch key %q, got %q", "/stage10/foo", key)
+	if key := string(watchEvent.Kv.Key); key != "/integration/foo" {
+		t.Fatalf("expected watch key %q, got %q", "/integration/foo", key)
 	}
 	if value := string(watchEvent.Kv.Value); value != "two" {
 		t.Fatalf("expected watched value %q, got %q", "two", value)
@@ -84,11 +84,11 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 	}
 
 	// 再写入一个同前缀 key，用来验证 prefix list 能看到完整当前视图。
-	if _, err := client.Put(ctx, "/stage10/bar", "three"); err != nil {
+	if _, err := client.Put(ctx, "/integration/bar", "three"); err != nil {
 		t.Fatalf("put second prefixed key: %v", err)
 	}
 
-	listResp, err := client.Client.Get(ctx, "/stage10/", clientv3.WithPrefix())
+	listResp, err := client.Client.Get(ctx, "/integration/", clientv3.WithPrefix())
 	if err != nil {
 		t.Fatalf("list prefixed keys: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestFilesystemBackendIntegration(t *testing.T) {
 		t.Fatalf("compact backend at revision %d: %v", updateResp.Header.Revision, err)
 	}
 
-	if _, err := client.Client.Get(ctx, "/stage10/foo", clientv3.WithRev(createResp.Header.Revision)); !errors.Is(err, rpctypes.ErrCompacted) {
+	if _, err := client.Client.Get(ctx, "/integration/foo", clientv3.WithRev(createResp.Header.Revision)); !errors.Is(err, rpctypes.ErrCompacted) {
 		t.Fatalf("expected compacted error for historical get, got %v", err)
 	}
 }
@@ -152,7 +152,7 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 		t.Fatalf("grant lease: %v", err)
 	}
 
-	putResp, err := client.Client.Put(ctx, "/stage10/ttl", "value", clientv3.WithLease(leaseResp.ID))
+	putResp, err := client.Client.Put(ctx, "/integration/ttl", "value", clientv3.WithLease(leaseResp.ID))
 	if err != nil {
 		t.Fatalf("put key with lease: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 	// 从 put 之后开始 watch，应该只看到 TTL 删除事件。
 	watchCtx, watchCancel := context.WithCancel(ctx)
 	defer watchCancel()
-	watchCh := client.Client.Watch(watchCtx, "/stage10/ttl", clientv3.WithRev(putResp.Header.Revision+1))
+	watchCh := client.Client.Watch(watchCtx, "/integration/ttl", clientv3.WithRev(putResp.Header.Revision+1))
 
 	watchResp := nextWatchResponse(t, watchCh)
 	if len(watchResp.Events) != 1 {
@@ -170,12 +170,12 @@ func TestFilesystemBackendTTLIntegration(t *testing.T) {
 	if watchEvent.Type != mvccpb.DELETE {
 		t.Fatalf("expected DELETE ttl watch event, got %s", watchEvent.Type)
 	}
-	if key := string(watchEvent.Kv.Key); key != "/stage10/ttl" {
-		t.Fatalf("expected ttl watch key %q, got %q", "/stage10/ttl", key)
+	if key := string(watchEvent.Kv.Key); key != "/integration/ttl" {
+		t.Fatalf("expected ttl watch key %q, got %q", "/integration/ttl", key)
 	}
 
 	// 删除事件到达后，再确认当前视图里已经看不到这个 key。
-	getResp, err := client.Client.Get(ctx, "/stage10/ttl")
+	getResp, err := client.Client.Get(ctx, "/integration/ttl")
 	if err != nil {
 		t.Fatalf("get ttl key after delete: %v", err)
 	}
