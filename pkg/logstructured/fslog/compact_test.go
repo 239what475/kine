@@ -109,11 +109,11 @@ func TestCompactWritesSnapshotAndCleansOldJournals(t *testing.T) {
 	if _, err := log.Compact(context.Background(), updateA); err != nil {
 		t.Fatal(err)
 	}
-	if len(log.snapshotFiles) == 0 {
+	if len(log.files.snapshotFiles) == 0 {
 		t.Fatal("expected compaction to write snapshot")
 	}
-	if log.metadata.ActiveSegment != segmentNameForRevision(currentRev+1) {
-		t.Fatalf("expected active segment %q, got %q", segmentNameForRevision(currentRev+1), log.metadata.ActiveSegment)
+	if log.files.metadata.ActiveSegment != segmentNameForRevision(currentRev+1) {
+		t.Fatalf("expected active segment %q, got %q", segmentNameForRevision(currentRev+1), log.files.metadata.ActiveSegment)
 	}
 	entries, err := os.ReadDir(filepath.Join(rootDir, journalDirName))
 	if err != nil {

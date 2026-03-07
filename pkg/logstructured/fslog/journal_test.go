@@ -29,13 +29,13 @@ func TestAppendCreatesJournalAndMetadata(t *testing.T) {
 	if rev != baseRev+1 {
 		t.Fatalf("expected revision %d, got %d", baseRev+1, rev)
 	}
-	if log.metadata.ActiveSegment != segmentNameForRevision(1) {
-		t.Fatalf("expected active segment %q, got %q", segmentNameForRevision(1), log.metadata.ActiveSegment)
+	if log.files.metadata.ActiveSegment != segmentNameForRevision(1) {
+		t.Fatalf("expected active segment %q, got %q", segmentNameForRevision(1), log.files.metadata.ActiveSegment)
 	}
-	if _, err := os.Stat(filepath.Join(log.journalDir, log.metadata.ActiveSegment)); err != nil {
+	if _, err := os.Stat(filepath.Join(log.files.journalDir, log.files.metadata.ActiveSegment)); err != nil {
 		t.Fatal(err)
 	}
-	metadataBytes, err := os.ReadFile(log.metadataPath)
+	metadataBytes, err := os.ReadFile(log.files.metadataPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,8 +92,8 @@ func TestAppendRotatesSegment(t *testing.T) {
 	if _, err := log.Append(ctx, &server.Event{Create: true, KV: &server.KeyValue{Key: "/b", Value: []byte("value")}}); err != nil {
 		t.Fatal(err)
 	}
-	if len(log.journalFiles) != int(log.currentRev.Load()) {
-		t.Fatalf("expected %d journal files after rotation, got %d", log.currentRev.Load(), len(log.journalFiles))
+	if len(log.files.journalFiles) != int(log.currentRev.Load()) {
+		t.Fatalf("expected %d journal files after rotation, got %d", log.currentRev.Load(), len(log.files.journalFiles))
 	}
 }
 
@@ -110,7 +110,7 @@ func TestReplayTruncatesPartialFinalLine(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 人工制造一个只写了一半的尾记录，模拟崩溃打断写入。
-	segmentPath := filepath.Join(log.journalDir, log.metadata.ActiveSegment)
+	segmentPath := filepath.Join(log.files.journalDir, log.files.metadata.ActiveSegment)
 	if file, err := os.OpenFile(segmentPath, os.O_WRONLY|os.O_APPEND, 0); err != nil {
 		t.Fatal(err)
 	} else {

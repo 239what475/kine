@@ -34,7 +34,7 @@ func (f *FSLog) writeSnapshotLocked(revision int64) error {
 		Records:         f.snapshotRecordsLocked(revision),
 	}
 
-	finalPath := filepath.Join(f.snapshotDir, snapshotNameForRevision(revision))
+	finalPath := filepath.Join(f.files.snapshotDir, snapshotNameForRevision(revision))
 	tmpPath := finalPath + tempFileSuffix
 
 	data, err := json.MarshalIndent(snapshot, "", "  ")
@@ -61,13 +61,13 @@ func (f *FSLog) writeSnapshotLocked(revision int64) error {
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("rename snapshot temp file %q: %w", tmpPath, err)
 	}
-	if err := syncDir(f.snapshotDir); err != nil {
+	if err := syncDir(f.files.snapshotDir); err != nil {
 		return err
 	}
 
-	if !containsPath(f.snapshotFiles, finalPath) {
-		f.snapshotFiles = append(f.snapshotFiles, finalPath)
-		sort.Strings(f.snapshotFiles)
+	if !containsPath(f.files.snapshotFiles, finalPath) {
+		f.files.snapshotFiles = append(f.files.snapshotFiles, finalPath)
+		sort.Strings(f.files.snapshotFiles)
 	}
 
 	// snapshot 落稳之后，把 journal 切到下一个 revision 开始的新 segment，
@@ -77,9 +77,9 @@ func (f *FSLog) writeSnapshotLocked(revision int64) error {
 	if err := f.openSegmentLocked(nextSegment, revision+1); err != nil {
 		return err
 	}
-	f.metadata.CurrentRevision = revision
-	if f.metadata.CompactRevision < snapshot.CompactRevision {
-		f.metadata.CompactRevision = snapshot.CompactRevision
+	f.files.metadata.CurrentRevision = revision
+	if f.files.metadata.CompactRevision < snapshot.CompactRevision {
+		f.files.metadata.CompactRevision = snapshot.CompactRevision
 	}
 	return f.writeMetadataLocked()
 }
@@ -102,11 +102,11 @@ func (f *FSLog) snapshotRecordsLocked(revision int64) []JournalRecord {
 
 // loadLatestSnapshot 把最新的 snapshot 加载成当前内存索引的起点状态。
 func (f *FSLog) loadLatestSnapshot() error {
-	f.loadedSnapshotRev = 0
-	if len(f.snapshotFiles) == 0 {
+	f.segment.loadedSnapshotRev = 0
+	if len(f.files.snapshotFiles) == 0 {
 		return nil
 	}
-	path := f.snapshotFiles[len(f.snapshotFiles)-1]
+	path := f.files.snapshotFiles[len(f.files.snapshotFiles)-1]
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read snapshot %q: %w", path, err)
@@ -122,18 +122,18 @@ func (f *FSLog) loadLatestSnapshot() error {
 	for _, record := range snapshot.Records {
 		f.applyRecordLocked(record)
 	}
-	f.loadedSnapshotRev = snapshot.CurrentRevision
-	if snapshot.CurrentRevision > f.metadata.CurrentRevision {
-		f.metadata.CurrentRevision = snapshot.CurrentRevision
+	f.segment.loadedSnapshotRev = snapshot.CurrentRevision
+	if snapshot.CurrentRevision > f.files.metadata.CurrentRevision {
+		f.files.metadata.CurrentRevision = snapshot.CurrentRevision
 	}
-	if snapshot.CompactRevision > f.metadata.CompactRevision {
-		f.metadata.CompactRevision = snapshot.CompactRevision
+	if snapshot.CompactRevision > f.files.metadata.CompactRevision {
+		f.files.metadata.CompactRevision = snapshot.CompactRevision
 	}
 
 	// 如果 metadata 里记录的 active segment 已经完全被 snapshot 覆盖掉，
 	// 就清空这个提示，让后续 replay / reopen 自行选择合适的文件。
-	if activeStart, ok := parseRevisionPrefix(f.metadata.ActiveSegment, journalFileSuffix); ok && activeStart <= snapshot.CurrentRevision {
-		f.metadata.ActiveSegment = ""
+	if activeStart, ok := parseRevisionPrefix(f.files.metadata.ActiveSegment, journalFileSuffix); ok && activeStart <= snapshot.CurrentRevision {
+		f.files.metadata.ActiveSegment = ""
 	}
 	return nil
 }

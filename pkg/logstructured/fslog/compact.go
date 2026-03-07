@@ -43,7 +43,7 @@ func (f *FSLog) Compact(ctx context.Context, targetCompactRev int64) (int64, err
 	// 先重建内存基线，再写 snapshot，最后删掉彻底过时的 journal 文件。
 	f.compactLocked(targetCompactRev)
 	f.compactRev.Store(targetCompactRev)
-	f.metadata.CompactRevision = targetCompactRev
+	f.files.metadata.CompactRevision = targetCompactRev
 	if err := f.writeSnapshotLocked(currentRev); err != nil {
 		return currentRev, err
 	}
@@ -136,8 +136,8 @@ func cloneRevOp(op *revOp) *revOp {
 
 // cleanupCompactedJournalLocked 删除已经完全过时的 journal 文件，只保留活跃 segment。
 func (f *FSLog) cleanupCompactedJournalLocked() error {
-	activePath := filepath.Join(f.journalDir, f.metadata.ActiveSegment)
-	for _, path := range f.journalFiles {
+	activePath := filepath.Join(f.files.journalDir, f.files.metadata.ActiveSegment)
+	for _, path := range f.files.journalFiles {
 		if path == activePath {
 			continue
 		}
@@ -145,10 +145,10 @@ func (f *FSLog) cleanupCompactedJournalLocked() error {
 			return err
 		}
 	}
-	f.journalFiles = nil
-	if f.metadata.ActiveSegment != "" {
-		f.journalFiles = append(f.journalFiles, activePath)
+	f.files.journalFiles = nil
+	if f.files.metadata.ActiveSegment != "" {
+		f.files.journalFiles = append(f.files.journalFiles, activePath)
 	}
-	sort.Strings(f.journalFiles)
-	return syncDir(f.journalDir)
+	sort.Strings(f.files.journalFiles)
+	return syncDir(f.files.journalDir)
 }

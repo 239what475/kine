@@ -18,17 +18,17 @@ func TestSnapshotWrittenAtConfiguredInterval(t *testing.T) {
 	createRev := mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/snap/a", Value: []byte("one")}})
 	mustAppendEvent(t, log, &server.Event{KV: &server.KeyValue{Key: "/snap/a", Value: []byte("two"), CreateRevision: createRev}, PrevKV: &server.KeyValue{Key: "/snap/a", Value: []byte("one"), CreateRevision: createRev, ModRevision: createRev}})
 
-	if len(log.snapshotFiles) != 1 {
-		t.Fatalf("expected 1 snapshot file, got %d", len(log.snapshotFiles))
+	if len(log.files.snapshotFiles) != 1 {
+		t.Fatalf("expected 1 snapshot file, got %d", len(log.files.snapshotFiles))
 	}
-	snapshotPath := log.snapshotFiles[0]
+	snapshotPath := log.files.snapshotFiles[0]
 	if _, err := os.Stat(snapshotPath); err != nil {
 		t.Fatal(err)
 	}
-	if log.metadata.ActiveSegment != segmentNameForRevision(3) {
-		t.Fatalf("expected active segment %q after snapshot, got %q", segmentNameForRevision(3), log.metadata.ActiveSegment)
+	if log.files.metadata.ActiveSegment != segmentNameForRevision(3) {
+		t.Fatalf("expected active segment %q after snapshot, got %q", segmentNameForRevision(3), log.files.metadata.ActiveSegment)
 	}
-	if _, err := os.Stat(filepath.Join(log.journalDir, log.metadata.ActiveSegment)); err != nil {
+	if _, err := os.Stat(filepath.Join(log.files.journalDir, log.files.metadata.ActiveSegment)); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(snapshotPath)
@@ -50,7 +50,7 @@ func TestSnapshotAndJournalRecovery(t *testing.T) {
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/snap/b", Value: []byte("three")}})
 
 	// snapshot 之后故意污染旧 segment，确认恢复过程会跳过已经被 snapshot 覆盖的历史文件。
-	oldSegment := filepath.Join(log.journalDir, segmentNameForRevision(1))
+	oldSegment := filepath.Join(log.files.journalDir, segmentNameForRevision(1))
 	if err := os.WriteFile(oldSegment, []byte("corrupted old segment should be skipped"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +93,7 @@ func TestStartupIgnoresInterruptedSnapshotTempFile(t *testing.T) {
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/snap/a", Value: []byte("one")}})
 	mustAppendEvent(t, log, &server.Event{Create: true, KV: &server.KeyValue{Key: "/snap/b", Value: []byte("two")}})
 
-	brokenTmp := filepath.Join(log.snapshotDir, snapshotNameForRevision(99)+tempFileSuffix)
+	brokenTmp := filepath.Join(log.files.snapshotDir, snapshotNameForRevision(99)+tempFileSuffix)
 	if err := os.WriteFile(brokenTmp, []byte(`{not-json`), 0o600); err != nil {
 		t.Fatal(err)
 	}

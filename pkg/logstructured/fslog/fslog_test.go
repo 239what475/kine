@@ -20,12 +20,12 @@ func TestStartCreatesDirectoryLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, path := range []string{rootDir, log.journalDir, log.snapshotDir, log.lockPath} {
+	for _, path := range []string{rootDir, log.files.journalDir, log.files.snapshotDir, log.files.lockPath} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
 		}
 	}
-	if log.lockFile == nil {
+	if log.files.lockFile == nil {
 		t.Fatal("expected lock file to be held")
 	}
 }
@@ -68,11 +68,11 @@ func TestStartLoadsExistingMetadataAndScansDirectories(t *testing.T) {
 	if got := log.appliedRev.Load(); got != 12 {
 		t.Fatalf("expected applied revision 12, got %d", got)
 	}
-	if len(log.journalFiles) != 1 {
-		t.Fatalf("expected 1 journal file, got %d", len(log.journalFiles))
+	if len(log.files.journalFiles) != 1 {
+		t.Fatalf("expected 1 journal file, got %d", len(log.files.journalFiles))
 	}
-	if len(log.snapshotFiles) != 1 {
-		t.Fatalf("expected 1 snapshot file, got %d", len(log.snapshotFiles))
+	if len(log.files.snapshotFiles) != 1 {
+		t.Fatalf("expected 1 snapshot file, got %d", len(log.files.snapshotFiles))
 	}
 }
 

@@ -23,29 +23,29 @@ func (f *FSLog) appendRecordLocked(record JournalRecord) error {
 	if err := f.ensureWritableSegmentLocked(record.Revision, int64(len(data))); err != nil {
 		return err
 	}
-	written, err := f.segmentWriter.Write(data)
+	written, err := f.segment.writer.Write(data)
 	if err != nil {
 		return fmt.Errorf("write journal record: %w", err)
 	}
-	if err := f.segmentWriter.Flush(); err != nil {
+	if err := f.segment.writer.Flush(); err != nil {
 		return fmt.Errorf("flush journal record: %w", err)
 	}
 	if f.syncEveryWrite {
-		if err := f.segmentFile.Sync(); err != nil {
+		if err := f.segment.file.Sync(); err != nil {
 			return fmt.Errorf("sync journal record: %w", err)
 		}
 	}
-	f.segmentSize += int64(written)
-	if !containsPath(f.journalFiles, filepath.Join(f.journalDir, f.segmentName)) {
-		f.journalFiles = append(f.journalFiles, filepath.Join(f.journalDir, f.segmentName))
+	f.segment.size += int64(written)
+	if !containsPath(f.files.journalFiles, filepath.Join(f.files.journalDir, f.segment.name)) {
+		f.files.journalFiles = append(f.files.journalFiles, filepath.Join(f.files.journalDir, f.segment.name))
 	}
 	return nil
 }
 
 // ensureWritableSegmentLocked 保证当前存在一个可写 segment，必要时会触发滚动。
 func (f *FSLog) ensureWritableSegmentLocked(nextRevision int64, recordSize int64) error {
-	if f.segmentFile == nil {
-		name := f.metadata.ActiveSegment
+	if f.segment.file == nil {
+		name := f.files.metadata.ActiveSegment
 		if name == "" {
 			name = segmentNameForRevision(nextRevision)
 		}
@@ -53,7 +53,7 @@ func (f *FSLog) ensureWritableSegmentLocked(nextRevision int64, recordSize int64
 			return err
 		}
 	}
-	if f.segmentSize > 0 && f.segmentSize+recordSize > f.segmentBytes {
+	if f.segment.size > 0 && f.segment.size+recordSize > f.segmentBytes {
 		f.closeSegmentLocked()
 		name := segmentNameForRevision(nextRevision)
 		if err := f.openSegmentLocked(name, nextRevision); err != nil {
@@ -65,7 +65,7 @@ func (f *FSLog) ensureWritableSegmentLocked(nextRevision int64, recordSize int64
 
 // openSegmentLocked 打开或创建一个 journal segment，并把它设为当前活跃文件。
 func (f *FSLog) openSegmentLocked(name string, startRevision int64) error {
-	path := filepath.Join(f.journalDir, name)
+	path := filepath.Join(f.files.journalDir, name)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open journal segment %q: %w", path, err)
@@ -75,28 +75,28 @@ func (f *FSLog) openSegmentLocked(name string, startRevision int64) error {
 		file.Close()
 		return fmt.Errorf("stat journal segment %q: %w", path, err)
 	}
-	f.segmentFile = file
-	f.segmentWriter = bufio.NewWriter(file)
-	f.segmentName = name
-	f.segmentSize = info.Size()
-	f.segmentStartRev = startRevision
-	f.metadata.ActiveSegment = name
+	f.segment.file = file
+	f.segment.writer = bufio.NewWriter(file)
+	f.segment.name = name
+	f.segment.size = info.Size()
+	f.segment.startRev = startRevision
+	f.files.metadata.ActiveSegment = name
 	return nil
 }
 
 // closeSegmentLocked 关闭当前活跃的 segment 文件和 writer。
 func (f *FSLog) closeSegmentLocked() {
-	if f.segmentWriter != nil {
-		_ = f.segmentWriter.Flush()
+	if f.segment.writer != nil {
+		_ = f.segment.writer.Flush()
 	}
-	if f.segmentFile != nil {
-		_ = f.segmentFile.Close()
+	if f.segment.file != nil {
+		_ = f.segment.file.Close()
 	}
-	f.segmentWriter = nil
-	f.segmentFile = nil
-	f.segmentName = ""
-	f.segmentSize = 0
-	f.segmentStartRev = 0
+	f.segment.writer = nil
+	f.segment.file = nil
+	f.segment.name = ""
+	f.segment.size = 0
+	f.segment.startRev = 0
 }
 
 // segmentNameForRevision 让 segment 文件名和 revision 顺序在字典序上保持一致。
@@ -106,7 +106,7 @@ func segmentNameForRevision(revision int64) string {
 
 // replayJournal 会按顺序回放需要参与恢复的所有 journal 文件。
 func (f *FSLog) replayJournal() error {
-	f.replayedRevision = 0
+	f.segment.replayedRevision = 0
 	paths := f.journalFilesForReplay()
 	for index, path := range paths {
 		if err := f.replayJournalFile(path, index == len(paths)-1); err != nil {
@@ -161,14 +161,14 @@ func (f *FSLog) replayJournalFile(path string, allowTailRepair bool) error {
 		}
 
 		// snapshot 已经覆盖掉的旧 revision 不需要再应用一次。
-		if record.Revision <= f.loadedSnapshotRev {
+		if record.Revision <= f.segment.loadedSnapshotRev {
 			offset = nextOffset
 			continue
 		}
 
 		f.applyRecordLocked(record)
-		if record.Revision > f.replayedRevision {
-			f.replayedRevision = record.Revision
+		if record.Revision > f.segment.replayedRevision {
+			f.segment.replayedRevision = record.Revision
 		}
 		offset = nextOffset
 	}
@@ -176,13 +176,13 @@ func (f *FSLog) replayJournalFile(path string, allowTailRepair bool) error {
 
 // journalFilesForReplay 只返回 snapshot 之后仍然需要参与恢复的 journal 文件。
 func (f *FSLog) journalFilesForReplay() []string {
-	if f.loadedSnapshotRev == 0 {
-		return append([]string(nil), f.journalFiles...)
+	if f.segment.loadedSnapshotRev == 0 {
+		return append([]string(nil), f.files.journalFiles...)
 	}
-	paths := make([]string, 0, len(f.journalFiles))
-	for _, path := range f.journalFiles {
+	paths := make([]string, 0, len(f.files.journalFiles))
+	for _, path := range f.files.journalFiles {
 		startRev, ok := parseRevisionPrefix(path, journalFileSuffix)
-		if !ok || startRev > f.loadedSnapshotRev {
+		if !ok || startRev > f.segment.loadedSnapshotRev {
 			paths = append(paths, path)
 		}
 	}
@@ -213,11 +213,11 @@ func (f *FSLog) applyRecordLocked(record JournalRecord) {
 
 // writeMetadataLocked 重写 metadata.json。
 func (f *FSLog) writeMetadataLocked() error {
-	data, err := json.MarshalIndent(f.metadata, "", "  ")
+	data, err := json.MarshalIndent(f.files.metadata, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode metadata: %w", err)
 	}
-	return os.WriteFile(f.metadataPath, append(data, '\n'), 0o600)
+	return os.WriteFile(f.files.metadataPath, append(data, '\n'), 0o600)
 }
 
 // containsPath 是一个小工具函数，用来判断某个路径是否已经在切片中。

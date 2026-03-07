@@ -22,7 +22,24 @@ import (
 // Start(...) 中。
 func New(config Config) *FSLog {
 	log := &FSLog{
-		rootDir:          config.RootDir,
+		rootDir: config.RootDir,
+		// 这里的 `btree.NewMap[string, []*revOp](0)` 是 Go 泛型（generics）语法。
+		//
+		// 可以拆成两层看：
+		//   1. `NewMap[...]` 中的 `[...]` 传的是“类型参数”，不是数组或切片；
+		//   2. 最后的 `(0)` 才是普通函数参数。
+		//
+		// 所以这行的意思其实是：
+		//   - 创建一个 btree.Map
+		//   - 其中 key 的类型是 `string`
+		//   - value 的类型是 `[]*revOp`
+		//   - 再把运行时参数 `0` 传给构造函数
+		//
+		// 如果把它翻成更接近自然语言的话，就是：
+		// “给我创建一个按 string 排序、value 为 []*revOp 的 B-Tree Map”。
+		//
+		// 之所以这里不用普通的 Go map，是因为 byKey 不只是做精确查找，还要支持
+		// 有序遍历、前缀扫描、从 startKey 继续往后扫等操作；这些都更适合有序的 B-Tree。
 		byKey:            btree.NewMap[string, []*revOp](0),
 		byRev:            map[int64]*revOp{},
 		stream:           make(chan server.Events, 128),
@@ -82,7 +99,7 @@ func (f *FSLog) Start(ctx context.Context) error {
 
 	// currentRev 可能同时受 metadata、snapshot、journal replay 三方影响，
 	// 所以这里统一取最大值作为恢复后的可见边界。
-	currentRev := maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
+	currentRev := maxInt64(maxInt64(f.files.metadata.CurrentRevision, f.segment.replayedRevision), f.segment.loadedSnapshotRev)
 
 	// brand-new store 需要补一条兼容记录，让 fresh store 的启动 revision
 	// 语义与其他 Kine 后端保持一致。
@@ -92,11 +109,11 @@ func (f *FSLog) Start(ctx context.Context) error {
 	}
 
 	// 兼容记录本身可能推进了 metadata.CurrentRevision，所以这里再算一次。
-	currentRev = maxInt64(maxInt64(f.metadata.CurrentRevision, f.replayedRevision), f.loadedSnapshotRev)
+	currentRev = maxInt64(maxInt64(f.files.metadata.CurrentRevision, f.segment.replayedRevision), f.segment.loadedSnapshotRev)
 	f.currentRev.Store(currentRev)
-	f.compactRev.Store(f.metadata.CompactRevision)
+	f.compactRev.Store(f.files.metadata.CompactRevision)
 	f.appliedRev.Store(currentRev)
-	f.metadata.CurrentRevision = currentRev
+	f.files.metadata.CurrentRevision = currentRev
 
 	// 后端生命周期跟随外层 context；context 结束时统一释放锁和文件句柄。
 	go func() {
@@ -109,7 +126,7 @@ func (f *FSLog) Start(ctx context.Context) error {
 
 // ensureLayout 预先创建根目录、journal 目录和 snapshot 目录。
 func (f *FSLog) ensureLayout() error {
-	for _, dir := range []string{f.rootDir, f.journalDir, f.snapshotDir} {
+	for _, dir := range []string{f.rootDir, f.files.journalDir, f.files.snapshotDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create fs backend directory %q: %w", dir, err)
 		}
@@ -120,7 +137,7 @@ func (f *FSLog) ensureLayout() error {
 // acquireLock 获取 backend 根目录上的 advisory exclusive lock。
 // 第一版就是靠它来保证“一个数据目录同一时刻只有一个写者进程”。
 func (f *FSLog) acquireLock() error {
-	file, err := os.OpenFile(f.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(f.files.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("open fs backend lock file: %w", err)
 	}
@@ -131,7 +148,7 @@ func (f *FSLog) acquireLock() error {
 		}
 		return fmt.Errorf("lock fs backend directory: %w", err)
 	}
-	f.lockFile = file
+	f.files.lockFile = file
 	return nil
 }
 
@@ -141,20 +158,20 @@ func (f *FSLog) releaseResources() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closeSegmentLocked()
-	if f.lockFile == nil {
+	if f.files.lockFile == nil {
 		return
 	}
-	_ = syscall.Flock(int(f.lockFile.Fd()), syscall.LOCK_UN)
-	_ = f.lockFile.Close()
-	f.lockFile = nil
+	_ = syscall.Flock(int(f.files.lockFile.Fd()), syscall.LOCK_UN)
+	_ = f.files.lockFile.Close()
+	f.files.lockFile = nil
 }
 
 // loadMetadata 读取 metadata.json；如果文件不存在，就把它当成 brand-new store。
 func (f *FSLog) loadMetadata() error {
-	data, err := os.ReadFile(f.metadataPath)
+	data, err := os.ReadFile(f.files.metadataPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			f.metadata = metadata{}
+			f.files.metadata = metadata{}
 			return nil
 		}
 		return fmt.Errorf("read fs backend metadata: %w", err)
@@ -163,27 +180,27 @@ func (f *FSLog) loadMetadata() error {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return fmt.Errorf("decode fs backend metadata: %w", err)
 	}
-	f.metadata = meta
+	f.files.metadata = meta
 	return nil
 }
 
 // scanState 扫描当前 snapshot / journal 文件集合，并记录为有序路径列表。
 func (f *FSLog) scanState() error {
-	snapshots, err := collectFileNames(f.snapshotDir, snapshotFileSuffix)
+	snapshots, err := collectFileNames(f.files.snapshotDir, snapshotFileSuffix)
 	if err != nil {
 		return fmt.Errorf("scan snapshot directory: %w", err)
 	}
-	journals, err := collectFileNames(f.journalDir, journalFileSuffix)
+	journals, err := collectFileNames(f.files.journalDir, journalFileSuffix)
 	if err != nil {
 		return fmt.Errorf("scan journal directory: %w", err)
 	}
-	f.snapshotFiles = snapshots
-	f.journalFiles = journals
+	f.files.snapshotFiles = snapshots
+	f.files.journalFiles = journals
 
 	// 如果 metadata 里还没有 active segment，就默认把扫描到的最新 journal
 	// 视为当前活跃文件。
-	if f.metadata.ActiveSegment == "" && len(journals) > 0 {
-		f.metadata.ActiveSegment = filepath.Base(journals[len(journals)-1])
+	if f.files.metadata.ActiveSegment == "" && len(journals) > 0 {
+		f.files.metadata.ActiveSegment = filepath.Base(journals[len(journals)-1])
 	}
 	return nil
 }
@@ -256,7 +273,7 @@ func (f *FSLog) bootstrapCompatibilityRevision(currentRev int64) error {
 		return err
 	}
 	f.applyRecordLocked(record)
-	f.metadata.CurrentRevision = record.Revision
+	f.files.metadata.CurrentRevision = record.Revision
 	return f.writeMetadataLocked()
 }
 

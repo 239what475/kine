@@ -44,7 +44,7 @@ func (f *FSLog) Append(ctx context.Context, event *server.Event) (int64, error) 
 
 	// 一旦 journal 追加成功，就把它同步映射到内存索引。
 	f.applyRecordLocked(record)
-	f.metadata.CurrentRevision = nextRev
+	f.files.metadata.CurrentRevision = nextRev
 
 	// metadata 是小型辅助状态；journal 才是核心事实来源。
 	// 当前实现延续已有行为：如果 metadata 重写失败，这次 append 仍然返回

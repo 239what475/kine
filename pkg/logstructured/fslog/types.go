@@ -114,6 +114,52 @@ func (r *revOp) effectiveCreateRevision() int64 {
 	return r.revision
 }
 
+// fileState 是 rootDir 展开后的文件系统工作集。
+//
+// 它把 FSLog 需要长期持有的路径、句柄和扫描结果收拢到一起，避免主 struct 里混着一大串
+// 文件系统细节。可以把它理解成“这个 FSLog 实例当前绑定到哪个磁盘目录，以及已经认识了
+// 哪些文件”。
+type fileState struct {
+	// lockFile 不是普通缓存，而是必须持续持有的文件句柄；文件锁依赖它对应的 fd 存活。
+	lockFile *os.File
+	// metadata 是 metadata.json 的内存副本，避免每次都重新读文件。
+	metadata metadata
+	// lockPath 指向 <root>/LOCK，用来加排他锁，确保同一 rootDir 只有一个写者进程。
+	lockPath string
+	// currentPath 对应 <root>/CURRENT。当前实现尚未真正写入它，但保留了这个派生路径，
+	// 方便后续如果要引入类似“当前活跃 segment 指针文件”的做法时直接复用。
+	currentPath string
+	// metadataPath 指向 <root>/metadata.json，它保存 currentRevision / compactRevision /
+	// activeSegment 这类小型控制面状态。
+	metadataPath string
+	// journalDir 指向 <root>/journal，真正不断增长的变更日志文件都在这里。
+	journalDir string
+	// snapshotDir 指向 <root>/snapshots，周期性 snapshot 和 compact 后写出的快照都在这里。
+	snapshotDir string
+	// journalFiles 是当前已知 journal 文件的绝对路径列表；它来自启动扫描，也会在运行时随着
+	// 新 segment 生成和 compact 清理而更新。
+	journalFiles []string
+	// snapshotFiles 是当前已知 snapshot 文件的绝对路径列表；恢复时通常会取其中最新的一份。
+	snapshotFiles []string
+}
+
+// segmentState 是当前活跃 journal segment 以及恢复过程的辅助状态。
+//
+// 它保存“当前正在写哪个 segment”以及“最近一次恢复加载到了哪里”。这些信息都强相关，
+// 放在同一个小结构里会比散落在 FSLog 顶层更容易建立心智模型。
+type segmentState struct {
+	// file / writer 是当前活跃 segment 的打开句柄和带缓冲写入器。
+	file   *os.File
+	writer *bufio.Writer
+	// name / size / startRev 描述当前活跃 segment 本身。
+	name     string
+	size     int64
+	startRev int64
+	// loadedSnapshotRev / replayedRevision 则描述最近一次启动恢复加载到了哪里。
+	loadedSnapshotRev int64
+	replayedRevision  int64
+}
+
 // FSLog 是 `logstructured.Log` 的文件系统实现。
 //
 // 它同时维护三类状态：
@@ -135,9 +181,37 @@ type FSLog struct {
 	appliedRev   atomic.Int64
 	watchStarted atomic.Bool
 
-	// byKey 适合做按 key 读取 / 前缀扫描；
-	// byRev 适合做按 revision 顺序回放。
+	// byKey 适合做按 key 读取 / 前缀扫描。
+	//
+	// 这里的 value 之所以是 `[]*revOp`，而不是单个值，也不是 `map[int64]*revOp`，
+	// 是因为同一个 key 在时间线上会经历多次 create / update / delete / recreate，
+	// 我们需要把它保存成“一条按 revision 排序的历史链”。
+	//
+	// 例如 key `/a` 可能对应：
+	//   rev=5  -> create
+	//   rev=9  -> update
+	//   rev=12 -> delete
+	//   rev=20 -> recreate
+	// 那么 `byKey["/a"]` 最自然的形态就是 `[]*revOp{...}` 这种有序序列。
+	//
+	// 这样设计有几个直接好处：
+	//   1. 查“某个 key 在指定 revision 时的状态”时，可以沿着这条历史链从后往前找
+	//      最后一条 `revision <= targetRevision` 的记录；
+	//   2. append 新版本时很自然，就是往这个切片后面继续追加；
+	//   3. compact 一个 key 的历史时，也更容易按顺序保留基线和后续记录。
+	//
+	// value 里用 `*revOp` 而不是 `revOp`，是因为同一条逻辑记录还会同时出现在 `byRev`
+	// 这套索引里。用指针可以让两个索引共享同一个对象；只有在 compaction 这类需要构造
+	// 新基线的时候，才显式 clone 一份。
 	byKey *btree.Map[string, []*revOp]
+	// byRev 适合做按 revision 精确定位和顺序回放。
+	//
+	// 它回答的问题和 byKey 不一样：
+	//   - byKey 关注“某个 key 的整条历史链”；
+	//   - byRev 关注“全局 revision = X 时，对应的那条记录是什么”。
+	//
+	// 所以这里直接用 `map[int64]*revOp`：以 revision 为键，可以快速命中单条记录；
+	// 在需要顺序回放时，再按 revision 递增去取即可。
 	byRev map[int64]*revOp
 
 	// broadcaster / stream 用来支撑 Watch 的实时事件分发。
@@ -153,32 +227,17 @@ type FSLog struct {
 	// cond 用来让 WaitForSyncTo 等待某个 revision 真正变得可见。
 	cond *sync.Cond
 
-	// 下面这一组是文件句柄和派生路径。
-	lockFile      *os.File
-	metadata      metadata
-	lockPath      string
-	currentPath   string
-	metadataPath  string
-	journalDir    string
-	snapshotDir   string
-	journalFiles  []string
-	snapshotFiles []string
-
-	// 当前活跃 journal segment 的运行时状态。
-	segmentFile       *os.File
-	segmentWriter     *bufio.Writer
-	segmentName       string
-	segmentSize       int64
-	segmentStartRev   int64
-	loadedSnapshotRev int64
-	replayedRevision  int64
+	// files 收拢 rootDir 派生出来的固定路径、文件句柄和扫描结果。
+	files fileState
+	// segment 收拢当前活跃 segment 和恢复过程的辅助状态。
+	segment segmentState
 }
 
 // initPaths 只负责把一批常用路径一次性算出来，避免后续到处重复拼接。
 func (f *FSLog) initPaths() {
-	f.lockPath = filepath.Join(f.rootDir, lockFileName)
-	f.currentPath = filepath.Join(f.rootDir, currentFileName)
-	f.metadataPath = filepath.Join(f.rootDir, metadataFileName)
-	f.journalDir = filepath.Join(f.rootDir, journalDirName)
-	f.snapshotDir = filepath.Join(f.rootDir, snapshotDirName)
+	f.files.lockPath = filepath.Join(f.rootDir, lockFileName)
+	f.files.currentPath = filepath.Join(f.rootDir, currentFileName)
+	f.files.metadataPath = filepath.Join(f.rootDir, metadataFileName)
+	f.files.journalDir = filepath.Join(f.rootDir, journalDirName)
+	f.files.snapshotDir = filepath.Join(f.rootDir, snapshotDirName)
 }
